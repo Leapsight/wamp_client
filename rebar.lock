@@ -20,7 +20,7 @@
   1},
  {<<"lager">>,{pkg,<<"lager">>,<<"3.9.1">>},0},
  {<<"log_formatter">>,
-  {git,"git@gitlab.com:leapsight-lojack/log_formatter.git",
+  {git,"git@gitlab.com:leapsight-private/log_formatter.git",
        {ref,"3f17635157b4617a816dbca54483393cf8ba093f"}},
   0},
  {<<"msgpack">>,{pkg,<<"msgpack">>,<<"0.7.0">>},0},
