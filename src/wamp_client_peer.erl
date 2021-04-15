@@ -952,7 +952,7 @@ validate_handler(Handler) ->
     throw(invalid_handler).
 
 pick_worker(Peername, Term) ->
-    case gproc:get_value({p, l, {gproc_pool, default}}, shared) of
+    case gproc:get_value({p, l, {gproc_pool, Peername}}, shared) of
         {_, Type} when Type == round_robin; Type == random ->
             do_pick_worker(Peername);
         {_, Type} when Type == hash orelse Type == direct andalso is_integer(Term) ->
