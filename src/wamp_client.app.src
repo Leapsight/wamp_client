@@ -27,7 +27,7 @@
     jsone,
     msgpack,
     pbkdf2,
-    log_formatter,
+    % log_formatter,
     gproc,
     app_config,
     backoff,
