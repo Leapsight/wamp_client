@@ -490,12 +490,11 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                 is_map(RKWArgs),
                 is_map(RDetails)
             ->
-                %% AWRE drops EARgs and EDEtails!!!
-                ok = awre:error(Conn, ReqId, RKWArgs, RUri)
+                ok = awre:error(Conn, ReqId, RDetails, RUri, RArgs, RKWArgs)
         end
     catch
         {badarity, N, Arities} ->
-            EKWArgs =
+            Error =
                 #{
                     code => badarity,
                     message =>
@@ -515,7 +514,8 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                         )
                 },
             EUri = <<"wamp.error.invalid_argument">>,
-            awre:error(Conn, ReqId, EKWArgs, EUri);
+
+            awre:error(Conn, ReqId, #{}, EUri, [Error], #{});
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
                 message => "Error while handling WAMP invocation",
@@ -528,7 +528,7 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                 reason => Reason,
                 stacktrace => Stacktrace
             }),
-            EKWArgs =
+            Error =
                 #{
                     code => internal_error,
                     message => <<"Internal error.">>,
@@ -536,7 +536,7 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                         <<"There was an internal error, please contact the administrator.">>
                 },
             EUri = <<"com.magenta.error.internal_error">>,
-            awre:error(Conn, ReqId, EKWArgs, EUri)
+            awre:error(Conn, ReqId, #{}, EUri, [Error], #{})
     end.
 
 %% @private
@@ -560,7 +560,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
         apply_callback(Handler, Args, KWArgs, Details)
     catch
         {badarity, N, Arities} ->
-            RKWArgs =
+            Error =
                 #{
                     code => badarity,
                     message =>
@@ -580,7 +580,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                         )
                 },
             RUri = <<"wamp.error.invalid_argument">>,
-            awre:error(Conn, PubId, RKWArgs, RUri);
+            awre:error(Conn, PubId, #{}, RUri, [Error], #{});
         Class:Reason:Stacktrace ->
             %% @TODO review error handling and URIs
             ?LOG_DEBUG(#{
@@ -595,7 +595,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                 reason => Reason,
                 stacktrace => Stacktrace
             }),
-            RKWArgs =
+            Error=
                 #{
                     code => internal_error,
                     message => <<"Internal error.">>,
@@ -603,7 +603,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                         <<"There was an internal error, please contact the administrator.">>
                 },
             RUri = <<"com.magenta.error.internal_error">>,
-            awre:error(Conn, PubId, RKWArgs, RUri)
+            awre:error(Conn, PubId, #{}, RUri, [Error], #{})
     end.
 
 apply_callback({Mod, Fun, Arities}, Args, KWArgs, Details) ->
@@ -770,8 +770,7 @@ connect(#state{router = Router} = State0) ->
         port := Port,
         realm := Realm,
         encoding := Encoding
-    } =
-        Router,
+    } = Router,
 
     {ok, Conn} = awre:start_client(),
     link(Conn),

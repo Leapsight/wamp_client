@@ -8,7 +8,7 @@ curl -X "POST" "http://localhost:18081/realms/" \
      -H 'Content-Type: application/json; charset=utf-8' \
      -H 'Accept: application/json; charset=utf-8' \
      -d $'{
-  "uri": "com.magenta.test",
+  "uri": "com.wamp_client.test",
   "description": "Test"
 }'
 
