@@ -359,7 +359,7 @@ init([PeerName, WorkerName, Config]) ->
         #state{
             router = Router,
             backoff = init_backoff(Router),
-            max_retries = maps:get(max_retries, Router, 10),
+            max_retries = maps:get(reconnect_max_retries, Router, 10),
             registrations = process_registrations(Config),
             subscriptions = process_subscriptions(Config)
         },
