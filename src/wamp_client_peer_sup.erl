@@ -86,7 +86,7 @@ start_link(SupName, PeerName, Peer) ->
 %% =============================================================================
 
 init([Peer]) ->
-    Children = [?WORKER(wamp_client_peer, [Peer], temporary, 5000)],
+    Children = [?WORKER(wamp_client_peer, [Peer], permanent, 5000)],
     Specs = {{simple_one_for_one, 5, 60}, Children},
     {ok, Specs}.
 
