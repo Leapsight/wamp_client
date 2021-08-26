@@ -348,8 +348,8 @@ call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
             {error, <<"wamp.error.timeout">>, [], EKWArgs, #{}};
 
         Class:Reason:Stacktrace ->
-            lager:error(#{
-                message => "Error while sending WAMP call request",
+            ?LOG_ERROR(#{
+                text => "Error while sending WAMP call request",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace,
@@ -406,8 +406,8 @@ publish(WorkerPid, Uri, Args, KWArgs, Opts) when
             RKWArgs = #{<<"topic_uri">> => Uri, <<"timeout">> => Timeout},
             {error, <<"wamp.error.timeout">>, [], RKWArgs, #{}};
         Class:Reason:Stacktrace ->
-            lager:error(#{
-                message => "Error while sending WAMP publish request",
+            ?LOG_ERROR(#{
+                text => "Error while sending WAMP publish request",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace,
@@ -525,7 +525,7 @@ when is_tuple(Event), element(1, Event) == event->
     {noreply, State};
 
 handle_info({'EXIT', Pid, Reason}, #state{connection = Pid} = State0) ->
-    lager:error(#{message => "WAMP connection down", reason => Reason}),
+    ?LOG_ERROR(#{text => "WAMP connection down", reason => Reason}),
     State1 =
         State0#state{
             registration_state = #{},
@@ -535,7 +535,7 @@ handle_info({'EXIT', Pid, Reason}, #state{connection = Pid} = State0) ->
     {ok, State2} = maybe_reconnect(State1),
     {noreply, State2};
 handle_info(Msg, State) ->
-    ?LOG_WARNING(#{message => "Received info message", reason => Msg}),
+    ?LOG_WARNING(#{text => "Received info message", reason => Msg}),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -563,7 +563,7 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     #{RegId := #{handler := Handler}} = State#state.registration_state,
 
     ?LOG_DEBUG(#{
-        message => "Handling invocation",
+        text => "Handling invocation",
         request_id => ReqId,
         registration_id => RegId,
         handler => Handler,
@@ -609,8 +609,8 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
             awre:error(Conn, ReqId, #{}, EUri, [Error], #{});
 
         Class:Reason:Stacktrace ->
-            lager:error(#{
-                message => "Error while handling WAMP invocation",
+            ?LOG_ERROR(#{
+                text => "Error while handling WAMP invocation",
                 request_id => ReqId,
                 registration_id => RegId,
                 handler => Handler,
@@ -723,12 +723,11 @@ register_all(#state{} = State) ->
                 {ok, _, NewState} ->
                     NewState;
                 {error, Reason, _NewState} ->
-                    lager:info("~p", [#{
-                        message =>
-                            "Error while registering procedure",
+                    ?LOG_INFO(#{
+                        text => "Error while registering procedure",
                         procedure_uri => Uri,
                         options => Opts
-                    }]),
+                    }),
                     error({init_failure, Reason})
             end
         end,
@@ -746,11 +745,11 @@ subscribe_all(State) ->
                 {ok, _, NewState} ->
                     NewState;
                 {error, Reason} ->
-                    lager:info("~p", [#{
-                        message => "Error while subscribing",
+                    ?LOG_INFO(#{
+                        text => "Error while subscribing",
                         topic_uri => Uri,
                         options => Opts
-                    }]),
+                    }),
                     error({init_failure, Reason})
             end
         end,
@@ -769,12 +768,12 @@ do_register(Uri, Opts, Handler, #state{} = State) ->
         error ->
             case awre:register(Conn, maps:to_list(Opts), Uri) of
                 {ok, RegId} ->
-                    lager:info("~p", [#{
-                        message => "Successfully registered procedure",
+                    ?LOG_INFO(#{
+                        text => "Successfully registered procedure",
                         procedure_uri => Uri,
                         handler => Handler,
                         options => Opts
-                    }]),
+                    }),
 
                     RegState1 = maps:put(Uri, RegId, RegState0),
                     Callback = #{uri => Uri, handler => Handler},
@@ -819,8 +818,8 @@ do_subscribe(Uri, Opts, Handler, #state{} = State) ->
 
     case awre:subscribe(Conn, maps:to_list(Opts), Uri) of
         {ok, SubsId} ->
-            lager:info(#{
-                message => "Successfully subscribed",
+            ?LOG_INFO(#{
+                text => "Successfully subscribed",
                 topic_uri => Uri,
                 handler => Handler,
                 options => Opts
@@ -882,8 +881,8 @@ connect(#state{router = Router} = State0) ->
         {ok, State2}
     catch
         Class:Reason:Stacktrace ->
-            lager:error(#{
-                message => "Failed to connect to WAMP Router",
+            ?LOG_ERROR(#{
+                text => "Failed to connect to WAMP Router",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace
@@ -893,19 +892,19 @@ connect(#state{router = Router} = State0) ->
 
 %% @private
 on_connect(State0) ->
-    lager:error("Connected ~p", [State0#state.connection]),
+    ?LOG_ERROR("Connected ~p", [State0#state.connection]),
     State1 = register_all(State0),
     subscribe_all(State1).
 
 %% @private
 maybe_reconnect(#state{backoff = undefined}) ->
-    lager:error(#{
-        message => "Failed to connect to WAMP Router",
+    ?LOG_ERROR(#{
+        text => "Failed to connect to WAMP Router",
         reconnection_enabled => false
     }),
     exit(wamp_connection_error);
 maybe_reconnect(#state{max_retries = N, retry_count = M}) when N < M ->
-    lager:error(#{
+    ?LOG_ERROR(#{
         message =>
             "Failed to connect to WAMP Router after max retries reached",
         reconnection_enabled => true,
@@ -915,8 +914,8 @@ maybe_reconnect(#state{max_retries = N, retry_count = M}) when N < M ->
 maybe_reconnect(#state{backoff = B0, retry_count = N} = State0) ->
     case connect(State0) of
         {ok, State1} ->
-            lager:info(#{
-                message => "Connected to router"
+            ?LOG_INFO(#{
+                text => "Connected to router"
             }),
             {_, B1} = backoff:succeed(B0),
             State2 = State1#state{backoff = B1},
@@ -924,7 +923,7 @@ maybe_reconnect(#state{backoff = B0, retry_count = N} = State0) ->
         {error, _} ->
             {Time, B1} = backoff:fail(B0),
 
-            lager:info(#{
+            ?LOG_INFO(#{
                 message =>
                     "Failed to connect to WAMP Router, will retry",
                 reconnection_enabled => true,
@@ -1045,7 +1044,7 @@ validate_handler({M, F} = Handler) when is_atom(M) andalso is_atom(F) ->
         ),
     case Exports of
         [] ->
-            lager:error(#{message => "Invalid handler", handler => Handler}),
+            ?LOG_ERROR(#{text => "Invalid handler", handler => Handler}),
             throw(invalid_handler);
         [{F, Arities0}] ->
             %% All wamp handlers should have at least 1 args
@@ -1063,7 +1062,7 @@ validate_handler(Fun) when is_function(Fun) ->
     {Fun, [N]};
 
 validate_handler(Handler) ->
-    lager:error("Invalid handler ~p", [Handler]),
+    ?LOG_ERROR("Invalid handler ~p", [Handler]),
     throw(invalid_handler).
 
 pick_worker(Peername, Term) ->
