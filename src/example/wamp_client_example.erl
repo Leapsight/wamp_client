@@ -19,65 +19,89 @@
 
 -include_lib("kernel/include/logger.hrl").
 
--export([add/3]).
+-export([add/4]).
+-export([echo/1]).
+-export([echo/2]).
 -export([echo/3]).
--export([multiple_results/2]).
+-export([echo/4]).
+-export([multiple_results/1]).
 -export([circular/3]).
--export([circular_service_error/2]).
--export([unknown_error/2]).
--export([notfound_error/2]).
--export([validation_error/2]).
--export([service_error/2]).
--export([authorization_error/2]).
+-export([circular_service_error/1]).
+-export([unknown_error/1]).
+-export([notfound_error/1]).
+-export([validation_error/1]).
+-export([service_error/1]).
+-export([authorization_error/1]).
 -export([timeout/3]).
 -export([onhello/3]).
 -export([onadd/4]).
 
--spec add(number(), number(), map()) -> number().
-add(A, B, _Opts) ->
+
+-spec add(number(), number(), map(), map()) -> number().
+add(A, B, _KWArgs, _Opts) ->
     {ok, [A + B], #{}, #{}}.
 
--spec echo(any(), map(), map()) -> any().
+
+echo(_Opts) ->
+    {ok, [], #{}, #{}}.
+
+echo(KWArgs, _Opts) ->
+    {ok, [], KWArgs, #{}}.
+
 echo(Msg, KWArgs, _Opts) ->
     {ok, [Msg], KWArgs, #{}}.
 
--spec multiple_results(map(), map()) -> list().
-multiple_results(_KWArgs, _Opts) ->
+echo(A, B, KWArgs, _Opts) ->
+    {ok, [A, B], KWArgs, #{}}.
+
+
+
+
+-spec multiple_results(map()) -> list().
+
+multiple_results(_Opts) ->
     {ok, [1, 2, 3], #{}, #{}}.
 
 -spec circular(any(), map(), map()) ->
                   {ok, any()} | {error, binary(), map()} | no_return().
 circular(Msg, KWArgs, _Opts) ->
     {ok, Args, _, _} =
-        wamp_client_peer:call(default, <<"com.example.echo">>, [Msg], KWArgs, #{}),
+        wamp_client_peer:call(
+            default, <<"com.example.echo">>, #{}, [Msg], KWArgs
+        ),
     {ok, Args, #{}, #{}}.
 
--spec circular_service_error(map(), map()) -> {ok, any()} | no_return().
-circular_service_error(KWArgs, _Opts) ->
-    wamp_client_peer:call(default, <<"com.example.service_error">>, [], KWArgs, #{}).
+-spec circular_service_error(map()) -> {ok, any()} | no_return().
+circular_service_error(_Opts) ->
+    wamp_client_peer:call(default, <<"com.example.service_error">>).
 
--spec unknown_error(map(), map()) -> no_return().
-unknown_error(_KWArgs, _Opts) ->
+
+-spec unknown_error(map()) -> no_return().
+
+unknown_error(_Opts) ->
     error("no match of right hand side value 2").
 
--spec notfound_error(map(), map()) -> no_return().
-notfound_error(_KWArgs, _Opts) ->
-    {error, <<"com.magenta.error.not_found">>, [], #{}, #{}}.
+-spec notfound_error(map()) -> no_return().
 
--spec validation_error(map(), map()) -> no_return().
-validation_error(_KWArgs, _Opts) ->
+notfound_error(_Opts) ->
+    {error, <<"com.myservice.error.not_found">>, [], #{}, #{}}.
+
+
+-spec validation_error(map()) -> no_return().
+validation_error(_Opts) ->
     {error, <<"wamp.error.invalid_argument">>, [], #{code => <<"invalid argument">>}, #{}}.
 
--spec service_error(map(), map()) -> no_return().
-service_error(_KWArgs, _Opts) ->
+-spec service_error(map()) -> no_return().
+service_error(_Opts) ->
     KWArgs =
         #{code => service_error,
           message => <<"Service error">>,
           description => <<"Service Error">>},
-    {error, <<"com.magenta.error.internal_error">>, [], KWArgs, #{}}.
+    {error, <<"com.myservice.error.internal">>, [], KWArgs, #{}}.
 
--spec authorization_error(map(), map()) -> no_return().
-authorization_error(_KWArgs, _Opts) ->
+
+-spec authorization_error(map()) -> no_return().
+authorization_error(_Opts) ->
     KWArgs =
         #{code => authorization_error,
           message => <<"Authorization error">>,

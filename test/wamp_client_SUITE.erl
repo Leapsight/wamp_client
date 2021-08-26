@@ -7,9 +7,9 @@
 
 groups() ->
     [
-        {circular, [parallel], lists:map(fun(_) -> circular_test end, lists:seq(1, 1000))},
+        {circular, [parallel], lists:map(fun(_) -> circular_test end, lists:seq(1, 100))},
         {parallel_echo, [parallel],
-            lists:map(fun(_) -> parallel_echo_test end, lists:seq(1, 1000))},
+            lists:map(fun(_) -> parallel_echo_test end, lists:seq(1, 100))},
         {unregister_register, [parallel],
             lists:map(fun(_) -> unregister_register_test end, lists:seq(1, 50))}
     ].
@@ -159,8 +159,17 @@ echo_test(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.echo">>,
-            [Msg],
             #{},
+            [Msg]
+        )
+    ),
+    ?assertMatch(
+        {ok, [Msg], _, _},
+        wamp_client_peer:call(
+            default,
+            <<"com.example.echo">>,
+            #{},
+            [Msg],
             #{}
         )
     ).
@@ -168,11 +177,26 @@ echo_test(_) ->
 multiple_results_test(_) ->
     ?assertMatch(
         {ok, [1, 2, 3], _, _},
+        wamp_client_peer:call(default, <<"com.example.multiple">>)
+    ),
+
+    ?assertMatch(
+        {ok, [1, 2, 3], _, _},
         wamp_client_peer:call(
             default,
             <<"com.example.multiple">>,
-            [],
             #{},
+            []
+        )
+    ),
+
+    ?assertMatch(
+        {ok, [1, 2, 3], _, _},
+        wamp_client_peer:call(
+            default,
+            <<"com.example.multiple">>,
+            #{},
+            [],
             #{}
         )
     ).
@@ -184,45 +208,35 @@ circular_test(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.circular">>,
-            [Ref],
-            #{},
-            #{}
+            #{timeout =>30000},
+            [Ref]
         )
     ).
 
 circular_service_error(_) ->
     ?assertMatch(
-        {error, <<"com.magenta.error.internal_error">>, _, _, _},
+        {error, <<"com.myservice.error.internal">>, _, _, _},
         wamp_client_peer:call(
             default,
-            <<"com.example.circular_service_error">>,
-            [],
-            #{},
-            #{}
+            <<"com.example.circular_service_error">>
         )
     ).
 
 unknown_error_test(_) ->
     ?assertMatch(
-        {error, <<"com.magenta.error.internal_error">>, _, _, _},
+        {error, <<"com.myservice.error.internal">>, _, _, _},
         wamp_client_peer:call(
             default,
-            <<"com.example.unknown_error">>,
-            [],
-            #{},
-            #{}
+            <<"com.example.unknown_error">>
         )
     ).
 
 notfound_error_test(_) ->
     ?assertMatch(
-        {error, <<"com.magenta.error.not_found">>, _, _, _},
+        {error, <<"com.myservice.error.not_found">>, _, _, _},
         wamp_client_peer:call(
             default,
-            <<"com.example.notfound_error">>,
-            [],
-            #{},
-            #{}
+            <<"com.example.notfound_error">>
         )
     ).
 
@@ -231,22 +245,16 @@ validation_error_test(_) ->
     Result =
         wamp_client_peer:call(
             default,
-            <<"com.example.validation_error">>,
-            [],
-            #{},
-            #{}
+            <<"com.example.validation_error">>
         ),
     ?assertEqual(Expected, element(2, Result)).
 
 service_error_test(_) ->
     ?assertMatch(
-        {error, <<"com.magenta.error.internal_error">>, _, _, _},
+        {error, <<"com.myservice.error.internal">>, _, _, _},
         wamp_client_peer:call(
             default,
-            <<"com.example.service_error">>,
-            [],
-            #{},
-            #{}
+            <<"com.example.service_error">>
         )
     ).
 
@@ -255,10 +263,7 @@ authorization_error_test(_) ->
         {error, <<"wamp.error.not_authorized">>, _, _, _},
         wamp_client_peer:call(
             default,
-            <<"com.example.authorization_error">>,
-            [],
-            #{},
-            #{}
+            <<"com.example.authorization_error">>
         )
     ).
 
@@ -268,9 +273,8 @@ timeout_error_test(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.timeout">>,
-            [3000],
-            #{},
-            #{timeout => 1000}
+            #{timeout => 1000},
+            [3000]
         )
     ).
 
@@ -285,9 +289,8 @@ override_registered_procedure(_) ->
         wamp_client_peer:call(
             default,
             Uri,
-            [<<"old_echo">>],
             #{},
-            #{}
+            [<<"old_echo">>]
         )
     ),
 
@@ -303,9 +306,8 @@ override_registered_procedure(_) ->
         wamp_client_peer:call(
             default,
             Uri,
-            [<<"old_echo">>],
             #{},
-            #{}
+            [<<"old_echo">>]
         )
     ),
 
@@ -322,9 +324,8 @@ override_registered_procedure(_) ->
         wamp_client_peer:call(
             default,
             Uri,
-            [<<"old_echo">>],
             #{},
-            #{}
+            [<<"old_echo">>]
         )
     ).
 
@@ -344,9 +345,8 @@ dynamic_register(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.echo1">>,
-            [Msg],
             #{},
-            #{}
+            [Msg]
         )
     ).
 
@@ -357,9 +357,8 @@ parallel_echo_test(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.echo">>,
-            [Msg],
             #{},
-            #{}
+            [Msg]
         )
     ).
 
@@ -380,7 +379,7 @@ unregister_register_test(_) ->
     Msg = <<"Hello, world!">>,
     ?assertMatch(
         {ok, [<<"pong">>], _, _},
-        wamp_client_peer:call(default, Uri, [Msg], #{}, #{})
+        wamp_client_peer:call(default, Uri, #{}, [Msg])
     ),
     {ok, _} = wamp_client_peer:unregister(default, Uri).
 
@@ -408,9 +407,8 @@ long_call_test(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.timeout">>,
-            [10000],
-            #{},
-            #{timeout => 20000}
+            #{timeout => 20000},
+            [10000]
         )
     ),
     ?assertMatch(
@@ -418,8 +416,7 @@ long_call_test(_) ->
         wamp_client_peer:call(
             default,
             <<"com.example.timeout">>,
-            [30000],
-            #{},
-            #{timeout => 20000}
+            #{timeout => 20000},
+            [30000]
         )
     ).
