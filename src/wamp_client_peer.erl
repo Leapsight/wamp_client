@@ -948,23 +948,23 @@ when is_map(KWArgs) andalso map_size(KWArgs) == 0 ->
     to_handler_args(Details, Args, undefined, Arities);
 
 to_handler_args(Details, undefined, undefined, Arities) ->
-    Arity = 1,
-    lists:member(Arity, Arities) orelse throw({badarity, Arity - 1, Arities}),
+    Arity = 0,
+    lists:member(Arity + 1, Arities) orelse throw({badarity, Arity, Arities}),
     [Details];
 
 to_handler_args(Details, undefined, KWArgs, Arities) ->
-    Arity = 2,
-    lists:member(Arity, Arities) orelse throw({badarity, Arity - 2, Arities}),
+    Arity = 0,
+    lists:member(Arity + 2, Arities) orelse throw({badarity, Arity, Arities}),
     [KWArgs, Details];
 
 to_handler_args(Details, Args, undefined, Arities) when is_list(Args) ->
-    Arity = length(Args) + 2,
-    lists:member(Arity, Arities) orelse throw({badarity, Arity - 2, Arities}),
+    Arity = length(Args),
+    lists:member(Arity + 2, Arities) orelse throw({badarity, Arity, Arities}),
     Args ++ [#{}, Details];
 
 to_handler_args(Details, Args, KWArgs, Arities) ->
-    Arity = length(Args) + 2,
-    lists:member(Arity, Arities) orelse throw({badarity, Arity - 2, Arities}),
+    Arity = length(Args),
+    lists:member(Arity + 2, Arities) orelse throw({badarity, Arity, Arities}),
     Args ++ [KWArgs, Details].
 
 
