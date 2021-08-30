@@ -1104,9 +1104,10 @@ format_arity(_, [N]) ->
     io_lib:format("exactly ~B", [max(0, N - 2)]);
 
 format_arity('or', L0) ->
-    {L1, [N]} = lists:split(length(L0) - 1, L0),
-    Str = string:join([io_lib:format("~B", [max(0, X - 2)]) || X <- L1], [$,]),
-    io_lib:format("either ~s or ~B", [Str, max(0, N - 2)]).
+    L1 = ordsets:to_list(ordsets:from_list([max(0, X - 2) || X <- L0])),
+    {L2, [N]} = lists:split(length(L1) - 1, L1),
+    Str = string:join([io_lib:format("~B", [X]) || X <- L2], [$,, $\s]),
+    io_lib:format("either ~s or ~B positional arguments", [Str, N]).
 
 
 
