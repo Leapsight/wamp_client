@@ -918,7 +918,7 @@ maybe_reconnect(#state{backoff = B0, retry_count = N} = State0) ->
                 text => "Connected to router"
             }),
             {_, B1} = backoff:succeed(B0),
-            State2 = State1#state{backoff = B1},
+            State2 = State1#state{backoff = B1, retry_count = 0},
             {ok, State2};
         {error, _} ->
             {Time, B1} = backoff:fail(B0),
