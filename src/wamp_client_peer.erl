@@ -77,15 +77,25 @@
     subscription_state = #{} :: subscription_state()
 }).
 
+-type do() :: fun(() -> any()) | undefined.
 -type wamp_role() :: caller | callee | subscriber | publisher.
--type wamp_result() :: {ok, Args :: list(), KWArgs :: map(), Details :: map()}.
--type wamp_error() ::
-    {error, Uri :: binary(), Args :: list(), KWArgs :: map(), Details :: map()}.
+-type result() ::
+    {ok, Args :: list(), KWArgs :: map(), Details :: map()}
+    | {ok, Args :: list(), KWArgs :: map(), Details :: map(), After :: do()}.
+-type error() ::
+    {error, Uri :: binary(), Args :: list(), KWArgs :: map(), Details :: map()}
+    | {error, Uri :: binary(), Args :: list(), KWArgs :: map(), Details :: map(), After :: do()}.
+
+-export_type([result/0]).
+-export_type([error/0]).
 
 %% API
 -export([start_link/3]).
 -export([handle_invocation/2]).
 -export([handle_event/2]).
+-export([call/2]).
+-export([call/3]).
+-export([call/4]).
 -export([call/5]).
 -export([publish/5]).
 -export([register/4]).
@@ -244,6 +254,24 @@ unsubscribe(Peername, Uri) ->
 unsubscribe(Peername, Uri, Timeout) when is_atom(Peername) ->
     multi_request(Peername, {unsubscribe, Uri}, Timeout).
 
+
+%% -----------------------------------------------------------------------------
+%% @doc Makes an RPC call using the Peer worker instance identified by the
+%% `Peername` argument.
+%% This argument can be
+%% * the `pid()` of the Peer worker instance
+%% * the
+%% @end
+%% -----------------------------------------------------------------------------
+-spec call(
+    Peername :: atom() | {atom(), term()} | pid(),
+    Uri :: binary()
+) -> result() | error() | no_return().
+
+call(PeerName, Uri) ->
+    call(PeerName, Uri, #{}, undefined, undefined).
+
+
 %% -----------------------------------------------------------------------------
 %% @doc Makes an RPC call using the Peer worker instance identified by the
 %% `Peername` argument.
@@ -255,24 +283,64 @@ unsubscribe(Peername, Uri, Timeout) when is_atom(Peername) ->
 -spec call(
     Peername :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
-    Args :: list(),
-    KWArgs :: map(),
     Opts :: map()
-) -> wamp_result() | wamp_error() | no_return().
-call(Peername, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
-    call({Peername, Uri}, Uri, Args, KWArgs, Opts);
-call({Peername, Term}, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
+) -> result() | error() | no_return().
+
+call(PeerName, Uri, Opts) ->
+    call(PeerName, Uri, Opts, undefined, undefined).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Makes an RPC call using the Peer worker instance identified by the
+%% `Peername` argument.
+%% This argument can be
+%% * the `pid()` of the Peer worker instance
+%% * the
+%% @end
+%% -----------------------------------------------------------------------------
+-spec call(
+    Peername :: atom() | {atom(), term()} | pid(),
+    Uri :: binary(),
+    Opts :: map(),
+    Args :: list()
+) -> result() | error() | no_return().
+
+call(PeerName, Uri, Opts, Args) ->
+    call(PeerName, Uri, Opts, Args, undefined).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Makes an RPC call using the Peer worker instance identified by the
+%% `Peername` argument.
+%% This argument can be
+%% * the `pid()` of the Peer worker instance
+%% * the
+%% @end
+%% -----------------------------------------------------------------------------
+-spec call(
+    Peername :: atom() | {atom(), term()} | pid(),
+    Uri :: binary(),
+    Opts :: map(),
+    Args :: list(),
+    KWArgs :: map()
+) -> result() | error() | no_return().
+
+call(Peername, Uri, Opts, Args, KWArgs) when is_atom(Peername) ->
+    call({Peername, Uri}, Uri, Opts, Args, KWArgs);
+
+call({Peername, Term}, Uri, Opts, Args, KWArgs) when is_atom(Peername) ->
     WorkerPid = pick_worker(Peername, Term),
-    call(WorkerPid, Uri, Args, KWArgs, Opts);
-call(WorkerPid, Uri, Args, KWArgs, Opts) when is_pid(WorkerPid) ->
-    Timeout = maps:get(timeout, Opts, 5000),
+    call(WorkerPid, Uri, Opts, Args, KWArgs);
+
+call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
     %% We only use the server to get the connection, the rest is executed in
     %% the caller's process
     Conn = gen_server:call(WorkerPid, connection, 5000),
 
     try
         is_pid(Conn) orelse error(no_connection),
-        case awre:call(Conn, maps:to_list(Opts), Uri, Args, KWArgs, Timeout) of
+
+        case awre:call(Conn, maps:to_list(Opts), Uri, Args, KWArgs) of
             {ok, RDetails, RArgs, RKWArgs} ->
                 {ok, RArgs, RKWArgs, RDetails};
             {error, RDetails, RUri, RArgs, RKWArgs} ->
@@ -280,11 +348,15 @@ call(WorkerPid, Uri, Args, KWArgs, Opts) when is_pid(WorkerPid) ->
         end
     catch
         exit:{timeout, _} ->
-            EKWArgs = #{<<"procedure_uri">> => Uri, <<"timeout">> => Timeout},
+            EKWArgs = #{
+                <<"procedure_uri">> => Uri,
+                <<"timeout">> => maps:get(timeout, Opts, <<"default">>)
+            },
             {error, <<"wamp.error.timeout">>, [], EKWArgs, #{}};
+
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
-                message => "Error while sending WAMP call request",
+                text => "Error while sending WAMP call request",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace,
@@ -296,6 +368,17 @@ call(WorkerPid, Uri, Args, KWArgs, Opts) when is_pid(WorkerPid) ->
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
+
+% do_call(Conn, Opts, Uri, undefined, undefined) ->
+%     awre:call(Conn, Opts, Uri);
+
+% do_call(Conn, Opts, Uri, Args, undefined) ->
+%     awre:call(Conn, Opts, Uri, Args);
+
+% do_call(Conn, Opts, Uri, Args, KWArgs) ->
+%     awre:call(Conn, Opts, Uri, Args, KWArgs).
+
+
 %% -----------------------------------------------------------------------------
 %% @doc Notice that acknowledge option is not supporte by awre
 %% @end
@@ -306,7 +389,7 @@ call(WorkerPid, Uri, Args, KWArgs, Opts) when is_pid(WorkerPid) ->
     Args :: [any()],
     KWArgs :: map(),
     Opts :: map()
-) -> ok | wamp_error() | no_return().
+) -> ok | error() | no_return().
 publish(Peername, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
     publish({Peername, Uri}, Uri, Args, KWArgs, Opts);
 publish({Peername, Term}, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
@@ -331,7 +414,7 @@ publish(WorkerPid, Uri, Args, KWArgs, Opts) when
             {error, <<"wamp.error.timeout">>, [], RKWArgs, #{}};
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
-                message => "Error while sending WAMP publish request",
+                text => "Error while sending WAMP publish request",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace,
@@ -431,20 +514,25 @@ handle_call(_, _From, State) ->
 handle_cast(_, State) ->
     {noreply, State}.
 
-handle_info({awre, {invocation, _, _, _, _, _} = Invocation}, State) ->
+
+handle_info({awre, Invocation}, State)
+when is_tuple(Invocation), element(1, Invocation) == invocation->
     %% TODO use a pool or resource limiter
     %% invocation of the rpc handler
     spawn(fun() -> handle_invocation(Invocation, State) end),
     % TODO: handle load regulation?
     {noreply, State};
-handle_info({awre, {event, _, _, _, _, _} = Publication}, State) ->
+
+handle_info({awre, Event}, State)
+when is_tuple(Event), element(1, Event) == event->
     %% TODO use a pool or resource limiter
     %% invocation of the sub handler
-    spawn(fun() -> handle_event(Publication, State) end),
+    spawn(fun() -> handle_event(Event, State) end),
     % TODO: handle load regulation?
     {noreply, State};
+
 handle_info({'EXIT', Pid, Reason}, #state{connection = Pid} = State0) ->
-    ?LOG_ERROR(#{message => "WAMP connection down", reason => Reason}),
+    ?LOG_ERROR(#{text => "WAMP connection down", reason => Reason}),
     State1 =
         State0#state{
             registration_state = #{},
@@ -454,7 +542,7 @@ handle_info({'EXIT', Pid, Reason}, #state{connection = Pid} = State0) ->
     {ok, State2} = maybe_reconnect(State1),
     {noreply, State2};
 handle_info(Msg, State) ->
-    ?LOG_WARNING(#{message => "Received info message", reason => Msg}),
+    ?LOG_WARNING(#{text => "Received info message", reason => Msg}),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -467,12 +555,22 @@ code_change(_OldVsn, State, _Extra) ->
 %% PRIVATE
 %% =============================================================================
 
+handle_invocation({invocation, ReqId, RegId, Details}, State) ->
+    handle_invocation(
+        {invocation, ReqId, RegId, Details, undefined, undefined}, State
+    );
+
+handle_invocation({invocation, ReqId, RegId, Details, Args}, State) ->
+    handle_invocation(
+        {invocation, ReqId, RegId, Details, Args, undefined}, State
+    );
+
 handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     Conn = State#state.connection,
     #{RegId := #{handler := Handler}} = State#state.registration_state,
 
     ?LOG_DEBUG(#{
-        message => "Handling invocation",
+        text => "Handling invocation",
         request_id => ReqId,
         registration_id => RegId,
         handler => Handler,
@@ -481,16 +579,21 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     }),
 
     try
-        case apply_callback(Handler, Args, KWArgs, Details) of
-            {ok, RArgs, RKWArgs, RDetails} when is_list(RArgs), is_map(RKWArgs), is_map(RDetails) ->
-                ok = awre:yield(Conn, ReqId, RDetails, RArgs, RKWArgs);
-            {error, RUri, RArgs, RKWArgs, RDetails} when
-                is_binary(RUri),
-                is_list(RArgs),
-                is_map(RKWArgs),
-                is_map(RDetails)
-            ->
-                ok = awre:error(Conn, ReqId, RDetails, RUri, RArgs, RKWArgs)
+        case apply_callback(Handler, Details, Args, KWArgs) of
+            {ok, RArgs, RKWArgs, RDetails} ->
+                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, undefined);
+
+            {ok, RArgs, RKWArgs, RDetails, Fun} ->
+                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, Fun);
+
+            {error, RUri, RArgs, RKWArgs, RDetails} ->
+                ok = reply_error(
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, undefined
+                );
+            {error, RUri, RArgs, RKWArgs, RDetails, Fun} ->
+                ok = reply_error(
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, Fun
+                )
         end
     catch
         {badarity, N, Arities} ->
@@ -502,7 +605,7 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                     description =>
                         iolist_to_binary(
                             io_lib:format(
-                                <<"The call was made passing ~b positional arguments, when the procedure expects ~s arguments.">>,
+                                <<"The call was made passing ~b positional arguments, when the procedure expects ~s.">>,
                                 [
                                     N,
                                     format_arity(
@@ -516,9 +619,10 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
             EUri = <<"wamp.error.invalid_argument">>,
 
             awre:error(Conn, ReqId, #{}, EUri, [Error], #{});
+
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
-                message => "Error while handling WAMP invocation",
+                text => "Error while handling WAMP invocation",
                 request_id => ReqId,
                 registration_id => RegId,
                 handler => Handler,
@@ -528,16 +632,42 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                 reason => Reason,
                 stacktrace => Stacktrace
             }),
-            Error =
-                #{
-                    code => internal_error,
-                    message => <<"Internal error.">>,
-                    description =>
-                        <<"There was an internal error, please contact the administrator.">>
-                },
-            EUri = <<"com.magenta.error.internal_error">>,
+            Error =#{
+                code => internal_error,
+                message => <<"Internal error.">>,
+                description =>
+                    <<"There was an internal error, please contact the administrator.">>
+            },
+            EUri = wamp_client_config:get(
+                [error_uris, internal_error],
+                <<"com.myservice.error.internal">>
+            ),
             awre:error(Conn, ReqId, #{}, EUri, [Error], #{})
     end.
+
+
+%% @private
+reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun)
+when is_list(Args), is_map(KWArgs), is_map(Details) ->
+    ok = awre:yield(Conn, ReqId, Details, Args, KWArgs),
+    ok = maybe_apply_fun(Fun).
+
+
+%% @private
+reply_error(Conn, ReqId, Details, Uri, Args, KWArgs, Fun)
+when is_binary(Uri), is_list(Args), is_map(KWArgs), is_map(Details) ->
+    ok = awre:error(Conn, ReqId, Details, Uri, Args, KWArgs),
+    ok = maybe_apply_fun(Fun).
+
+
+%% @private
+maybe_apply_fun(undefined) ->
+    ok;
+
+maybe_apply_fun(Fun) ->
+    catch Fun(),
+    ok.
+
 
 %% @private
 handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
@@ -557,9 +687,9 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
     }),
 
     try
-        apply_callback(Handler, Args, KWArgs, Details)
+        apply_callback(Handler, Details, Args, KWArgs)
     catch
-        {badarity, N, Arities} ->
+        throw:{badarity, N, Arities} ->
             Error =
                 #{
                     code => badarity,
@@ -581,6 +711,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                 },
             RUri = <<"wamp.error.invalid_argument">>,
             awre:error(Conn, PubId, #{}, RUri, [Error], #{});
+
         Class:Reason:Stacktrace ->
             %% @TODO review error handling and URIs
             ?LOG_DEBUG(#{
@@ -602,22 +733,21 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                     description =>
                         <<"There was an internal error, please contact the administrator.">>
                 },
-            RUri = <<"com.magenta.error.internal_error">>,
+            RUri = wamp_client_config:get(
+                [error_uris, internal_error],
+                <<"com.myservice.error.internal">>
+            ),
             awre:error(Conn, PubId, #{}, RUri, [Error], #{})
     end.
 
-apply_callback({Mod, Fun, Arities}, Args, KWArgs, Details) ->
-    Arity = length(Args),
-    lists:member(Arity, Arities) orelse throw({badarity, Arity, Arities}),
-
-    HandlerArgs = to_handler_args(Args, KWArgs, Details),
+apply_callback({Mod, Fun, Arities}, Details, Args, KWArgs) ->
+    HandlerArgs = to_handler_args(Details, Args, KWArgs, Arities),
     apply(Mod, Fun, HandlerArgs);
-apply_callback({Fun, Arities}, Args, KWArgs, Details) when is_function(Fun) ->
-    Arity = length(Args),
-    lists:member(Arity, Arities) orelse throw({badarity, Arity, Arities}),
 
-    HandlerArgs = to_handler_args(Args, KWArgs, Details),
+apply_callback({Fun, Arities}, Details, Args, KWArgs) when is_function(Fun) ->
+    HandlerArgs = to_handler_args(Details, Args, KWArgs, Arities),
     apply(Fun, HandlerArgs).
+
 
 %% @private
 register_all(#state{} = State) ->
@@ -630,8 +760,7 @@ register_all(#state{} = State) ->
                     NewState;
                 {error, Reason, _NewState} ->
                     ?LOG_INFO(#{
-                        message =>
-                            "Error while registering procedure",
+                        text => "Error while registering procedure",
                         procedure_uri => Uri,
                         options => Opts
                     }),
@@ -653,7 +782,7 @@ subscribe_all(State) ->
                     NewState;
                 {error, Reason} ->
                     ?LOG_INFO(#{
-                        message => "Error while subscribing",
+                        text => "Error while subscribing",
                         topic_uri => Uri,
                         options => Opts
                     }),
@@ -676,7 +805,7 @@ do_register(Uri, Opts, Handler, #state{} = State) ->
             case awre:register(Conn, maps:to_list(Opts), Uri) of
                 {ok, RegId} ->
                     ?LOG_INFO(#{
-                        message => "Successfully registered procedure",
+                        text => "Successfully registered procedure",
                         procedure_uri => Uri,
                         handler => Handler,
                         options => Opts
@@ -726,7 +855,7 @@ do_subscribe(Uri, Opts, Handler, #state{} = State) ->
     case awre:subscribe(Conn, maps:to_list(Opts), Uri) of
         {ok, SubsId} ->
             ?LOG_INFO(#{
-                message => "Successfully subscribed",
+                text => "Successfully subscribed",
                 topic_uri => Uri,
                 handler => Handler,
                 options => Opts
@@ -789,7 +918,7 @@ connect(#state{router = Router} = State0) ->
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
-                message => "Failed to connect to WAMP Router",
+                text => "Failed to connect to WAMP Router",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace
@@ -806,7 +935,7 @@ on_connect(State0) ->
 %% @private
 maybe_reconnect(#state{backoff = undefined}) ->
     ?LOG_ERROR(#{
-        message => "Failed to connect to WAMP Router",
+        text => "Failed to connect to WAMP Router",
         reconnection_enabled => false
     }),
     exit(wamp_connection_error);
@@ -821,8 +950,11 @@ maybe_reconnect(#state{max_retries = N, retry_count = M}) when N < M ->
 maybe_reconnect(#state{backoff = B0, retry_count = N} = State0) ->
     case connect(State0) of
         {ok, State1} ->
+            ?LOG_INFO(#{
+                text => "Connected to router"
+            }),
             {_, B1} = backoff:succeed(B0),
-            State2 = State1#state{backoff = B1},
+            State2 = State1#state{backoff = B1, retry_count = 0},
             {ok, State2};
         {error, _} ->
             {Time, B1} = backoff:fail(B0),
@@ -842,19 +974,36 @@ maybe_reconnect(#state{backoff = B0, retry_count = N} = State0) ->
             maybe_reconnect(State1)
     end.
 
+
 %% @private
-to_handler_args(Args, KWArgs, Details) when
-    is_list(Args) andalso is_map(KWArgs) andalso is_map(Details)
-->
-    Args ++ [KWArgs, Details];
-to_handler_args(undefined, KWArgs, Details) ->
-    to_handler_args([], KWArgs, Details);
-to_handler_args(Args, undefined, Details) ->
-    to_handler_args(Args, #{}, Details);
-to_handler_args(Args, KWArgs, undefined) ->
-    to_handler_args(Args, KWArgs, #{});
-to_handler_args(Arg, KWArgs, Details) when not is_list(Arg) ->
-    to_handler_args([Arg], KWArgs, Details).
+to_handler_args(Details, [], KWArgs, Arities) ->
+    to_handler_args(Details, undefined, KWArgs, Arities);
+
+to_handler_args(Details, Args, KWArgs, Arities)
+when is_map(KWArgs) andalso map_size(KWArgs) == 0 ->
+    to_handler_args(Details, Args, undefined, Arities);
+
+to_handler_args(Details, undefined, undefined, Arities) ->
+    Arity = 0,
+    lists:member(Arity + 1, Arities) orelse throw({badarity, Arity, Arities}),
+    [Details];
+
+to_handler_args(Details, undefined, KWArgs, Arities) ->
+    Arity = 0,
+    lists:member(Arity + 2, Arities) orelse throw({badarity, Arity, Arities}),
+    [KWArgs, Details];
+
+to_handler_args(Details, Args, undefined, Arities) when is_list(Args) ->
+    Arity = length(Args),
+    lists:member(Arity + 2, Arities) orelse throw({badarity, Arity, Arities}),
+    Args ++ [#{}, Details];
+
+to_handler_args(Details, Args, KWArgs, Arities) ->
+    Arity = length(Args),
+    lists:member(Arity + 2, Arities) orelse throw({badarity, Arity, Arities}),
+    Args ++ [KWArgs, Details].
+
+
 
 get_router(#{router := RouterName}) ->
     wamp_client_config:get([routers, RouterName]);
@@ -931,21 +1080,23 @@ validate_handler({M, F} = Handler) when is_atom(M) andalso is_atom(F) ->
         ),
     case Exports of
         [] ->
-            ?LOG_ERROR(#{message => "Invalid handler", handler => Handler}),
+            ?LOG_ERROR(#{text => "Invalid handler", handler => Handler}),
             throw(invalid_handler);
         [{F, Arities0}] ->
-            %% All wamp handlers should have at least 2 args
-            %% (KWArgs and Details)
-            Arities = lists:filter(fun(X) -> X >= 2 end, Arities0),
+            %% All wamp handlers should have at least 1 args
+            %% (Details)
+            Arities = lists:filter(fun(X) -> X >= 1 end, Arities0),
             length(Arities) > 0 orelse throw(invalid_handler),
-            {M, F, [X - 2 || X <- Arities]}
+            {M, F, Arities}
     end;
+
 validate_handler(Fun) when is_function(Fun) ->
     {arity, N} = erlang:fun_info(Fun, arity),
-    %% All wamp handlers should have at least 2 args
-    %% (KWArgs and Details)
-    N >= 2 orelse throw(invalid_handler),
-    {Fun, [N - 2]};
+    %% All wamp handlers should have at least 1 args
+    %% (Details)
+    N >= 1 orelse throw(invalid_handler),
+    {Fun, [N]};
+
 validate_handler(Handler) ->
     ?LOG_ERROR("Invalid handler ~p", [Handler]),
     throw(invalid_handler).
@@ -983,12 +1134,18 @@ log_and_return({n, l, [gproc_pool, Peername, _, Name]} = Id) ->
     _ = gproc_pool:log(Id),
     Pid.
 
+
+
 format_arity(_, [N]) ->
-    io_lib:format("exactly ~B", [N]);
+    io_lib:format("exactly ~B", [max(0, N - 2)]);
+
 format_arity('or', L0) ->
-    {L1, [N]} = lists:split(length(L0) - 1, L0),
-    Str = string:join([io_lib:format("~B", [X]) || X <- L1], [$,]),
-    io_lib:format("either ~s or ~B", [Str, N]).
+    L1 = ordsets:to_list(ordsets:from_list([max(0, X - 2) || X <- L0])),
+    {L2, [N]} = lists:split(length(L1) - 1, L1),
+    Str = string:join([io_lib:format("~B", [X]) || X <- L2], [$,, $\s]),
+    io_lib:format("either ~s or ~B positional arguments", [Str, N]).
+
+
 
 multi_request(Peername, Request, Timeout) ->
     Refs =
@@ -996,6 +1153,8 @@ multi_request(Peername, Request, Timeout) ->
             {gen_server:send_request(Pid, Request), Pid}
          || {_, Pid} <- gproc_pool:active_workers(Peername)
         ],
+
+    Acc0 = maps:from_list([{Pid, undefined} || {_, Pid} <- Refs]),
 
     try
         Acc = lists:foldl(
@@ -1023,10 +1182,7 @@ multi_request(Peername, Request, Timeout) ->
                 (_, Acc) ->
                     throw({abort, Acc})
             end,
-            maps:from_list([
-                {Pid, undefined}
-             || {_, Pid} <- Refs
-            ]),
+            Acc0,
             Refs
         ),
         {ok, Acc}
