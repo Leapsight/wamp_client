@@ -77,10 +77,17 @@
     subscription_state = #{} :: subscription_state()
 }).
 
+-type do() :: fun(() -> any()) | undefined.
 -type wamp_role() :: caller | callee | subscriber | publisher.
--type wamp_result() :: {ok, Args :: list(), KWArgs :: map(), Details :: map()}.
--type wamp_error() ::
-    {error, Uri :: binary(), Args :: list(), KWArgs :: map(), Details :: map()}.
+-type result() ::
+    {ok, Args :: list(), KWArgs :: map(), Details :: map()}
+    | {ok, Args :: list(), KWArgs :: map(), Details :: map(), After :: do()}.
+-type error() ::
+    {error, Uri :: binary(), Args :: list(), KWArgs :: map(), Details :: map()}
+    | {error, Uri :: binary(), Args :: list(), KWArgs :: map(), Details :: map(), After :: do()}.
+
+-export_type([result/0]).
+-export_type([error/0]).
 
 %% API
 -export([start_link/3]).
@@ -259,7 +266,7 @@ unsubscribe(Peername, Uri, Timeout) when is_atom(Peername) ->
 -spec call(
     Peername :: atom() | {atom(), term()} | pid(),
     Uri :: binary()
-) -> wamp_result() | wamp_error() | no_return().
+) -> result() | error() | no_return().
 
 call(PeerName, Uri) ->
     call(PeerName, Uri, #{}, undefined, undefined).
@@ -277,7 +284,7 @@ call(PeerName, Uri) ->
     Peername :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map()
-) -> wamp_result() | wamp_error() | no_return().
+) -> result() | error() | no_return().
 
 call(PeerName, Uri, Opts) ->
     call(PeerName, Uri, Opts, undefined, undefined).
@@ -296,7 +303,7 @@ call(PeerName, Uri, Opts) ->
     Uri :: binary(),
     Opts :: map(),
     Args :: list()
-) -> wamp_result() | wamp_error() | no_return().
+) -> result() | error() | no_return().
 
 call(PeerName, Uri, Opts, Args) ->
     call(PeerName, Uri, Opts, Args, undefined).
@@ -316,7 +323,7 @@ call(PeerName, Uri, Opts, Args) ->
     Opts :: map(),
     Args :: list(),
     KWArgs :: map()
-) -> wamp_result() | wamp_error() | no_return().
+) -> result() | error() | no_return().
 
 call(Peername, Uri, Opts, Args, KWArgs) when is_atom(Peername) ->
     call({Peername, Uri}, Uri, Opts, Args, KWArgs);
@@ -382,7 +389,7 @@ call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
     Args :: [any()],
     KWArgs :: map(),
     Opts :: map()
-) -> ok | wamp_error() | no_return().
+) -> ok | error() | no_return().
 publish(Peername, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
     publish({Peername, Uri}, Uri, Args, KWArgs, Opts);
 publish({Peername, Term}, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
@@ -573,15 +580,20 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
 
     try
         case apply_callback(Handler, Details, Args, KWArgs) of
-            {ok, RArgs, RKWArgs, RDetails} when is_list(RArgs), is_map(RKWArgs), is_map(RDetails) ->
-                ok = awre:yield(Conn, ReqId, RDetails, RArgs, RKWArgs);
-            {error, RUri, RArgs, RKWArgs, RDetails} when
-                is_binary(RUri),
-                is_list(RArgs),
-                is_map(RKWArgs),
-                is_map(RDetails)
-            ->
-                ok = awre:error(Conn, ReqId, RDetails, RUri, RArgs, RKWArgs)
+            {ok, RArgs, RKWArgs, RDetails} ->
+                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, undefined);
+
+            {ok, RArgs, RKWArgs, RDetails, Fun} ->
+                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, Fun);
+
+            {error, RUri, RArgs, RKWArgs, RDetails} ->
+                ok = reply_error(
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, undefined
+                );
+            {error, RUri, RArgs, RKWArgs, RDetails, Fun} ->
+                ok = reply_error(
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, Fun
+                )
         end
     catch
         {badarity, N, Arities} ->
@@ -632,6 +644,30 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
             ),
             awre:error(Conn, ReqId, #{}, EUri, [Error], #{})
     end.
+
+
+%% @private
+reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun)
+when is_list(Args), is_map(KWArgs), is_map(Details) ->
+    ok = awre:yield(Conn, ReqId, Details, Args, KWArgs),
+    ok = maybe_apply_fun(Fun).
+
+
+%% @private
+reply_error(Conn, ReqId, Details, Uri, Args, KWArgs, Fun)
+when is_binary(Uri), is_list(Args), is_map(KWArgs), is_map(Details) ->
+    ok = awre:error(Conn, ReqId, Details, Uri, Args, KWArgs),
+    ok = maybe_apply_fun(Fun).
+
+
+%% @private
+maybe_apply_fun(undefined) ->
+    ok;
+
+maybe_apply_fun(Fun) ->
+    catch Fun(),
+    ok.
+
 
 %% @private
 handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
@@ -1118,6 +1154,8 @@ multi_request(Peername, Request, Timeout) ->
          || {_, Pid} <- gproc_pool:active_workers(Peername)
         ],
 
+    Acc0 = maps:from_list([{Pid, undefined} || {_, Pid} <- Refs]),
+
     try
         Acc = lists:foldl(
             fun
@@ -1144,10 +1182,7 @@ multi_request(Peername, Request, Timeout) ->
                 (_, Acc) ->
                     throw({abort, Acc})
             end,
-            maps:from_list([
-                {Pid, undefined}
-             || {_, Pid} <- Refs
-            ]),
+            Acc0,
             Refs
         ),
         {ok, Acc}

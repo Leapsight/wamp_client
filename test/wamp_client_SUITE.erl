@@ -26,12 +26,15 @@ all() ->
         authorization_error_test,
         dynamic_register,
         timeout_error_test,
+        publish_test,
+        % This test must be run with a pool == 1
+        % override_registered_procedure,
+
         {group, parallel_echo},
         {group, circular},
         {group, unregister_register},
-        publish_test,
-        long_call_test,
-        override_registered_procedure
+
+        long_call_test
     ].
 
 init_per_group(_, Config) ->
@@ -143,14 +146,15 @@ init_per_suite(Config) ->
             }}
         ]}
     ],
-    ok = application:set_env(Env),
+    % ok = application:set_env(Env),
     {ok, _} = application:ensure_all_started(gproc),
     {ok, _} = application:ensure_all_started(wamp_client),
     timer:sleep(2000),
     Config.
 
 end_per_suite(_Config) ->
-    application:stop(wamp_client).
+    % application:stop(wamp_client).
+    ok.
 
 echo_test(_) ->
     Msg = <<"Hello, world!">>,
@@ -282,8 +286,11 @@ override_registered_procedure(_) ->
     %% Already Registered
     Uri = <<"com.example.echo">>,
     Fun = fun(_, _, _) -> {ok, [<<"new_echo">>], #{}, #{}} end,
+    RegOpts = #{
+        invoke => roundrobin
+    },
 
-    {ok, _} = wamp_client_peer:register(default, Uri, #{}, Fun),
+    {ok, _} = wamp_client_peer:register(default, Uri, RegOpts, Fun),
     ?assertMatch(
         {ok, [<<"old_echo">>], _, _},
         wamp_client_peer:call(
@@ -295,7 +302,8 @@ override_registered_procedure(_) ->
     ),
 
     {ok, _} = wamp_client_peer:unregister(default, Uri),
-    {ok, _} = wamp_client_peer:register(default, Uri, #{}, Fun),
+
+    {ok, _} = wamp_client_peer:register(default, Uri, RegOpts, Fun),
 
     ?assertMatch(
         #{handler := {Fun, _}},
@@ -316,7 +324,7 @@ override_registered_procedure(_) ->
         wamp_client_peer:register(
             default,
             Uri,
-            #{},
+            RegOpts,
             {wamp_client_example, echo}
         ),
     ?assertMatch(
@@ -330,11 +338,14 @@ override_registered_procedure(_) ->
     ).
 
 dynamic_register(_) ->
+    RegOpts = #{
+        invoke => roundrobin
+    },
     {ok, _} =
         wamp_client_peer:register(
             default,
             <<"com.example.echo1">>,
-            #{},
+            RegOpts,
             fun(X, _, _) -> {ok, [X], #{}, #{}} end
         ),
     %% wait for registration
@@ -365,11 +376,14 @@ parallel_echo_test(_) ->
 unregister_register_test(_) ->
     N = erlang:unique_integer([positive, monotonic]),
     Uri = <<"com.example.echo.", (integer_to_binary(N))/binary>>,
+    RegOpts = #{
+        invoke => roundrobin
+    },
     {ok, _} =
         wamp_client_peer:register(
             default,
             Uri,
-            #{},
+            RegOpts,
             fun(_, _, _) ->
                 timer:sleep(500),
                 {ok, [<<"pong">>], #{}, #{}}
@@ -384,6 +398,9 @@ unregister_register_test(_) ->
     {ok, _} = wamp_client_peer:unregister(default, Uri).
 
 publish_test(_) ->
+    % dbg:tracer(), dbg:p(all, c),
+    % dbg:tpl(wamp_client_peer, x),
+    % dbg:tpl(gproc_pool, pick, x),
     ok =
         wamp_client_peer:publish(
             default,
