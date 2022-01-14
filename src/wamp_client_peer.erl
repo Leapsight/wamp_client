@@ -62,6 +62,7 @@
     }.
 
 -record(state, {
+    peername :: atom(),
     router :: router(),
     roles :: [wamp_role()],
     connection :: pid() | undefined,
@@ -77,7 +78,7 @@
     subscription_state = #{} :: subscription_state()
 }).
 
--type do() :: fun(() -> any()) | undefined.
+-type do() :: fun(() -> any()) | fun((Peername :: atom()) -> any()) | undefined.
 -type wamp_role() :: caller | callee | subscriber | publisher.
 -type result() ::
     {ok, Args :: list(), KWArgs :: map(), Details :: map()}
@@ -122,11 +123,11 @@
 %% API
 %% =============================================================================
 
-start_link(Config, PeerName, WorkerName) ->
+start_link(Config, Peername, WorkerName) ->
     gen_server:start_link(
         {local, WorkerName},
         ?MODULE,
-        [PeerName, WorkerName, Config],
+        [Peername, WorkerName, Config],
         []
     ).
 
@@ -268,8 +269,8 @@ unsubscribe(Peername, Uri, Timeout) when is_atom(Peername) ->
     Uri :: binary()
 ) -> result() | error() | no_return().
 
-call(PeerName, Uri) ->
-    call(PeerName, Uri, #{}, undefined, undefined).
+call(Peername, Uri) ->
+    call(Peername, Uri, #{}, undefined, undefined).
 
 
 %% -----------------------------------------------------------------------------
@@ -286,8 +287,8 @@ call(PeerName, Uri) ->
     Opts :: map()
 ) -> result() | error() | no_return().
 
-call(PeerName, Uri, Opts) ->
-    call(PeerName, Uri, Opts, undefined, undefined).
+call(Peername, Uri, Opts) ->
+    call(Peername, Uri, Opts, undefined, undefined).
 
 
 %% -----------------------------------------------------------------------------
@@ -305,8 +306,8 @@ call(PeerName, Uri, Opts) ->
     Args :: list()
 ) -> result() | error() | no_return().
 
-call(PeerName, Uri, Opts, Args) ->
-    call(PeerName, Uri, Opts, Args, undefined).
+call(Peername, Uri, Opts, Args) ->
+    call(Peername, Uri, Opts, Args, undefined).
 
 
 %% -----------------------------------------------------------------------------
@@ -433,13 +434,14 @@ info(Peername) when is_atom(Peername) ->
 %% GEN_SERVER CALLBACKS
 %% =============================================================================
 
-init([PeerName, WorkerName, Config]) ->
+init([Peername, WorkerName, Config]) ->
     process_flag(trap_exit, true),
 
     Router = get_router(Config),
 
     State =
         #state{
+            peername = Peername,
             router = Router,
             backoff = init_backoff(Router),
             max_retries = maps:get(reconnect_max_retries, Router, 10),
@@ -449,8 +451,8 @@ init([PeerName, WorkerName, Config]) ->
 
     %% We add the worker to the gproc pool
     true = gproc:reg({n, l, WorkerName}),
-    _ = gproc_pool:add_worker(PeerName, WorkerName),
-    _ = gproc_pool:connect_worker(PeerName, WorkerName),
+    _ = gproc_pool:add_worker(Peername, WorkerName),
+    _ = gproc_pool:connect_worker(Peername, WorkerName),
 
     {ok, State, {continue, connect}}.
 
@@ -567,6 +569,8 @@ handle_invocation({invocation, ReqId, RegId, Details, Args}, State) ->
 
 handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     Conn = State#state.connection,
+    Peername = State#state.peername,
+
     #{RegId := #{handler := Handler}} = State#state.registration_state,
 
     ?LOG_DEBUG(#{
@@ -581,18 +585,20 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     try
         case apply_callback(Handler, Details, Args, KWArgs) of
             {ok, RArgs, RKWArgs, RDetails} ->
-                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, undefined);
+                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, undefined, Peername);
 
             {ok, RArgs, RKWArgs, RDetails, Fun} ->
-                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, Fun);
+                ok = reply_yield(
+                    Conn, ReqId, RDetails, RArgs, RKWArgs, Fun, Peername
+                );
 
             {error, RUri, RArgs, RKWArgs, RDetails} ->
                 ok = reply_error(
-                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, undefined
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, undefined, Peername
                 );
             {error, RUri, RArgs, RKWArgs, RDetails, Fun} ->
                 ok = reply_error(
-                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, Fun
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, Fun, Peername
                 )
         end
     catch
@@ -647,25 +653,29 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
 
 
 %% @private
-reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun)
+reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun, Peername)
 when is_list(Args), is_map(KWArgs), is_map(Details) ->
     ok = awre:yield(Conn, ReqId, Details, Args, KWArgs),
-    ok = maybe_apply_fun(Fun).
+    ok = maybe_apply_fun(Fun, Peername).
 
 
 %% @private
-reply_error(Conn, ReqId, Details, Uri, Args, KWArgs, Fun)
+reply_error(Conn, ReqId, Details, Uri, Args, KWArgs, Fun, Peername)
 when is_binary(Uri), is_list(Args), is_map(KWArgs), is_map(Details) ->
     ok = awre:error(Conn, ReqId, Details, Uri, Args, KWArgs),
-    ok = maybe_apply_fun(Fun).
+    ok = maybe_apply_fun(Fun, Peername).
 
 
 %% @private
-maybe_apply_fun(undefined) ->
+maybe_apply_fun(undefined, _) ->
     ok;
 
-maybe_apply_fun(Fun) ->
+maybe_apply_fun(Fun, _) when is_function(Fun, 0) ->
     catch Fun(),
+    ok;
+
+maybe_apply_fun(Fun, Peername) when is_function(Fun, 1) ->
+    catch Fun(Peername),
     ok.
 
 
