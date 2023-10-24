@@ -64,7 +64,7 @@ start_link() ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
-    Peers = wamp_client_config:get(peers),
+    Peers = wamp_client_config:get(peers, #{}),
 
     Children =
         maps:fold(
