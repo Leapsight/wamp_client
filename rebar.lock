@@ -5,7 +5,7 @@
   0},
  {<<"awre">>,
   {git,"https://github.com/Leapsight/awre.git",
-       {ref,"1ada2c81a9ce2cc72b73dae9a33cd62987a2452b"}},
+       {ref,"e45bca24f35254328409cc29b10ad47a00952db7"}},
   0},
  {<<"backoff">>,
   {git,"https://github.com/ferd/backoff.git",
