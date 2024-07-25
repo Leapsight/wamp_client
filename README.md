@@ -103,7 +103,13 @@ Return types:
                 reconnect_max_retries => 10,
                 reconnect_backoff_min => 500,
                 reconnect_backoff_max => 120000,
-                reconnect_backoff_type => jitter
+                reconnect_backoff_type => jitter,
+                auth => #{
+                    user => <<"john.doe">>,
+                    %% anonymous (default) | password | wampcra
+                    method => wampcra,
+                    secret => <<"123456">>
+                }
             }
         }},
         {defaults, #{
