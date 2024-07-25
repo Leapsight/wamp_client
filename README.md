@@ -1,27 +1,16 @@
 # wamp_client
 
-> This library wraps an existing (incomplete) WAMP client implementation and adds some required features. It is intended to be replaced by a proper WAMP client implementation in Erlang.
+> This library wraps an existing (incomplete) WAMP client implementation and adds some required features. It is a first approach for a WAMP client implementation in Erlang.
 
-# Versions 0.6.0 and above
-
-
-## Changes versus previous versions
-
-### Summary
-
-* New module `wamp_client_peer` to replace `wamp_client`
-* Allows pools of WAMP Peers, each one with its own TCP connection to the router
-* The Handler API has been completely redesigned
-* The configuration has been completely redesigned
 
 ## Handler API
-The new handler API follows the WAMP APIs.
+The handler API follows the WAMP APIs.
 
-All callbacks should have at least two arguments (`KWArgs` and `Opts`).
+All callbacks should have at least two arguments (`KWArgs` and `Opts`):
 
 ```erlang
 -type callback  ::  {module(), FunctionName :: atom()}
-                    | function(
+    | function(
         (KWArgs :: map(), Opts :: map()) ->
             wamp_return() | wamp_error();
         (Arg1 :: any(), ..., ArgN :: any(), KWArgs :: map(), Opts :: map()) ->
@@ -29,22 +18,22 @@ All callbacks should have at least two arguments (`KWArgs` and `Opts`).
     )
 ```
 
-Return types
+Return types:
 ```erlang
--type wamp_result()             ::  {
-                                        ok,
-                                        Args :: list(),
-                                        KWArgs :: map(),
-                                        Details :: map()
-                                    }.
+-type wamp_result() ::  {
+    ok,
+    Args :: list(),
+    KWArgs :: map(),
+    Details :: map()
+}.
 
--type wamp_error()              ::  {
-                                        error,
-                                        Uri :: binary(),
-                                        Args :: list(),
-                                        KWArgs :: map(),
-                                        Details :: map()
-                                    }.
+-type wamp_error()  ::  {
+    error,
+    Uri :: binary(),
+    Args :: list(),
+    KWArgs :: map(),
+    Details :: map()
+}.
 ```
 
 ## Configuration
@@ -76,7 +65,6 @@ Return types
     {peers, #{
         PeerName :: atom() => Peer :: peer()
     }}
-
 ]}
 ```
 
@@ -109,8 +97,8 @@ Return types
             bondy => #{
                 hostname => "localhost",
                 port => 18082,
-                realm => <<"com.magenta.test">>,
-                encoding => erlbin,
+                realm => <<"com.leapsight.test">>,
+                encoding => json,
                 reconnect => true,
                 reconnect_max_retries => 10,
                 reconnect_backoff_min => 500,

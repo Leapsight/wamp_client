@@ -43,7 +43,12 @@
         reconnect_max_retries => integer(),
         reconnect_backoff_min => integer(),
         reconnect_backoff_max => integer(),
-        reconnect_backoff_type => jitter | normal
+        reconnect_backoff_type => jitter | normal,
+        auth => #{
+            method := anonymous | password | wampcra,
+            user := binary(),
+            secret := binary()
+        }
     }.
 -type handler() :: {module(), atom(), [integer()]} | {function(), [integer()]}.
 -type registrations() ::
@@ -914,21 +919,48 @@ connect(#state{router = Router} = State0) ->
     {ok, Conn} = awre:start_client(),
     link(Conn),
 
-    try
-        {ok, SessionId, Details} =
-            awre:connect(Conn, Host, Port, Realm, Encoding),
-        State1 =
-            State0#state{
+    AuthConfig = maps:get(auth, Router, undefined),
+    AuthDetails = case AuthConfig of
+        #{user := AuthId, method := AuthMethod, secret := AuthKey} ->
+            #{authid => AuthId, authmethod => AuthMethod, authkey => AuthKey};
+        _ ->
+            %% as an anonymous user
+            undefined
+    end,
+    case connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
+        {ok, SessionId, Details} ->
+            State1 = State0#state{
                 connection = Conn,
                 session_id = SessionId,
                 router_details = Details
             },
-        State2 = on_connect(State1),
-        {ok, State2}
+            State2 = on_connect(State1),
+            {ok, State2};
+        {error, _Reason} = Error ->
+            Error
+    end.
+
+%% @private
+connect(Conn, Host, Port, Realm, Encoding, AuthDetails) ->
+    try awre:connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
+        {ok, _SessionId, _Details} = OK ->
+            OK;
+        {abort, Details, Reason} ->
+            %% examples:
+            %% {abort, #{<<"message">> => <<"Realm does not exist">>}, <<"wamp.error.no_such_realm">>}
+            %% {abort, #{<<"message">> => <<"User 'X' does not exist.">>}, <<"wamp.error.no_such_principal">>}
+            %% {abort, #{<<"message">> => <<"The signature did not match.">>}, <<"wamp.error.authentication_failed">>}
+            %% {abort, #{<<"message">> => <<"The requested authentication methods are not available for this user on this realm.">>, <<"wamp.error.not_auth_method">>}
+            ?LOG_ERROR(#{
+                text => "Failure trying to connect to the WAMP Router",
+                details => Details,
+                reason => Reason
+            }),
+            {error, Reason}
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
-                text => "Failed to connect to WAMP Router",
+                text => "Unexpected error trying to connect to the WAMP Router",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace
