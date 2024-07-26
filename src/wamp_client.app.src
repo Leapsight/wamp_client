@@ -27,6 +27,8 @@
     sasl,
     jsone,
     msgpack,
+    %% 3rd-party Crypto
+    enacl,
     pbkdf2,
     % log_formatter,
     gproc,

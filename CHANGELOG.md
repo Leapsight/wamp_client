@@ -8,16 +8,22 @@ All notable changes to this project will be documented in this file. This projec
 - Support for authentication process with the following auth methods:
     - `password`
     - `wampcra`
-    Auth configuration in the router side:
+    - `cryptosign`: It requires **libsodium**!
+
+    Auth configuration in client for the router side:
     ```erlang
     auth => #{
         user => <<"my_authid">>,
-        %% anonymous (default) | password | wampcra
+        %% anonymous (default) | password | wampcra | cryptosign
         method => wampcra,
-        secret => <<"my_secret">>
+        %% for password & wampcra
+        secret => <<"my_secret">>,
+        %% for cryptosign
+        pubkey => <<"my_pubkey">>,
+        privkey => <<"my_privkey">>
     }
     ``` 
-    A new version of `awre` dependency library was required.
+    A new version of `awre` dependency library was required and also `enacl` was added.
 
 ### Changed
 - New version of the following dependency libraries:

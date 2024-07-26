@@ -919,14 +919,7 @@ connect(#state{router = Router} = State0) ->
     {ok, Conn} = awre:start_client(),
     link(Conn),
 
-    AuthConfig = maps:get(auth, Router, undefined),
-    AuthDetails = case AuthConfig of
-        #{user := AuthId, method := AuthMethod, secret := AuthKey} ->
-            #{authid => AuthId, authmethod => AuthMethod, authkey => AuthKey};
-        _ ->
-            %% as an anonymous user
-            undefined
-    end,
+    AuthDetails = maps:get(auth, Router, undefined),
     case connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
         {ok, SessionId, Details} ->
             State1 = State0#state{

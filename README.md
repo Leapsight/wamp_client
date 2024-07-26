@@ -38,6 +38,12 @@ Return types:
 
 ## Configuration
 
+### Authentication
+The following auth methods are supported (See below an example of the auth configuration):
+- `password`
+- `wampcra`
+- `crytosign`: it requires **libsodium**!!
+
 ### Type Spec and structure
 
 ```erlang
@@ -106,9 +112,11 @@ Return types:
                 reconnect_backoff_type => jitter,
                 auth => #{
                     user => <<"john.doe">>,
-                    %% anonymous (default) | password | wampcra
+                    %% anonymous (default) | password | wampcra | cryptosign
                     method => wampcra,
-                    secret => <<"123456">>
+                    secret => <<"123456">>,
+                    pubkey => <<"1766c9e6ec7d7b354fd7a2e4542753a23cae0b901228305621e5b8713299ccdd">>,
+                    privkey => <<"4ffddd896a530ce5ee8c86b83b0d31835490a97a9cd718cb2f09c9fd31c4a7d71766c9e6ec7d7b354fd7a2e4542753a23cae0b901228305621e5b8713299ccdd">>
                 }
             }
         }},
