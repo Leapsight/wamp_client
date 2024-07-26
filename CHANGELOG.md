@@ -34,7 +34,7 @@ All notable changes to this project will be documented in this file. This projec
     - **backoff**
 
 ### TODO
-- [] Add support for `cryptosign` auth method.
+- [x] Add support for `cryptosign` auth method.
 
 ## [1.2.4] - 2024 June
 
