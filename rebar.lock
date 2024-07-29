@@ -5,7 +5,7 @@
   0},
  {<<"awre">>,
   {git,"https://github.com/Leapsight/awre.git",
-       {ref,"d55fff34d524d43150ca1f7d36ffc71236a3a096"}},
+       {ref,"62b776038ec0ae768fd3eae97cf128f7d81ac935"}},
   0},
  {<<"backoff">>,{pkg,<<"backoff">>,<<"1.1.6">>},0},
  {<<"base62">>,
