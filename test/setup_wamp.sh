@@ -102,6 +102,15 @@ curl -X "POST" 'http://localhost:18081/realms/com.wamp_client.public/sources' \
     "cidr" : "0.0.0.0/0"
 }'
 
+# curl -X "POST" 'http://localhost:18081/realms/com.wamp_client.public/sources' \
+#      -H 'Content-Type: application/json; charset=utf-8' \
+#      -H 'Accept: application/json; charset=utf-8' \
+#      -d '{
+#     "usernames": "john.doe",
+#     "authmethod": "cryptosign",
+#     "cidr" : "0.0.0.0/0"
+# }'
+
 ## Add User to the Realm
 curl -X "POST" 'http://localhost:18081/realms/com.wamp_client.public/users' \
      -H 'Content-Type: application/json; charset=utf-8' \

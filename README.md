@@ -39,10 +39,33 @@ Return types:
 ## Configuration
 
 ### Authentication
+
+```mermaid
+sequenceDiagram
+    client -> router: HELLO message
+    router -> client: CHALLENGE message
+    client -> router: AUTHENTICATE (or ABORT message)
+    router -> client: WELCOME (or ABORT message)
+```
+
 The following auth methods are supported (See below an example of the auth configuration):
-- `password`
-- `wampcra`
-- `crytosign`: it requires **libsodium**!!
+- `password`: Password authentication in WAMP involves the use of a username and password. This method is straightforward and relies on the client providing a password that matches the one stored on the server. It’s similar to traditional login methods used in many web applications. The password is send in clear-text and is therefore vulnerable to password “sniffing” attacks, unless the connection is protected by TLS encryption. It should be avoided and replaced by the use of wamp-cra or wamp-scram challenge-response methods if possible.
+- `wampcra`: WAMP-CRA (WAMP Challenge-Response Authentication) is a more secure method compared to plain password authentication. Here’s how it works:
+  - The client sends a “hello” message to the server.
+  - The server responds with a challenge, a unique string.
+  - The client then uses a secret (shared between the client and the server) and the challenge to generate a hashed response.
+  - The server verifies this response using the same secret and challenge. If it matches, the client is authenticated.
+  
+  WAMP-CRA ensures that passwords are not sent over the network, reducing the risk of interception.
+- `crytosign`: it requires **libsodium**!! WAMP-Cryptosign is a WAMP-level authentication mechanism which uses Curve25519-based cryptography - Ed25519 private signing keys. It allows authentication from both sides (client-router and router-client) to prevent MITM attacks. Like TLS, it is a public-key authentication mechanism. In this method:
+  - The client and server both have key pairs (public and private keys).
+  - The client signs authentication messages with its private key.
+  - The server verifies the signature using the client’s public key.
+  - This method provides a very high level of security since it relies on the robustness of cryptographic algorithms and ensures that private keys never need to be transmitted or shared.
+
+  Cryptosign is especially useful in scenarios requiring strong security assurances and is well-suited for environments where public-key infrastructures (PKIs) are used.
+
+These methods cater to different security needs and levels, allowing flexibility in choosing the right one for a given application’s security requirements.
 
 ### Type Spec and structure
 
@@ -240,7 +263,8 @@ The following auth methods are supported (See below an example of the auth confi
     ]},
 
     {awre, [
-        {erlbin_number, 15}
+        {erlbin_number, 15},
+        {agent, my_service}
     ]},
 
     {kernel, [
