@@ -1,27 +1,16 @@
 # wamp_client
 
-> This library wraps an existing (incomplete) WAMP client implementation and adds some required features. It is intended to be replaced by a proper WAMP client implementation in Erlang.
+> This library wraps an existing (incomplete) WAMP client implementation and adds some required features. It is a first approach for a WAMP client implementation in Erlang.
 
-# Versions 0.6.0 and above
-
-
-## Changes versus previous versions
-
-### Summary
-
-* New module `wamp_client_peer` to replace `wamp_client`
-* Allows pools of WAMP Peers, each one with its own TCP connection to the router
-* The Handler API has been completely redesigned
-* The configuration has been completely redesigned
 
 ## Handler API
-The new handler API follows the WAMP APIs.
+The handler API follows the WAMP APIs.
 
-All callbacks should have at least two arguments (`KWArgs` and `Opts`).
+All callbacks should have at least two arguments (`KWArgs` and `Opts`):
 
 ```erlang
 -type callback  ::  {module(), FunctionName :: atom()}
-                    | function(
+    | function(
         (KWArgs :: map(), Opts :: map()) ->
             wamp_return() | wamp_error();
         (Arg1 :: any(), ..., ArgN :: any(), KWArgs :: map(), Opts :: map()) ->
@@ -29,25 +18,54 @@ All callbacks should have at least two arguments (`KWArgs` and `Opts`).
     )
 ```
 
-Return types
+Return types:
 ```erlang
--type wamp_result()             ::  {
-                                        ok,
-                                        Args :: list(),
-                                        KWArgs :: map(),
-                                        Details :: map()
-                                    }.
+-type wamp_result() ::  {
+    ok,
+    Args :: list(),
+    KWArgs :: map(),
+    Details :: map()
+}.
 
--type wamp_error()              ::  {
-                                        error,
-                                        Uri :: binary(),
-                                        Args :: list(),
-                                        KWArgs :: map(),
-                                        Details :: map()
-                                    }.
+-type wamp_error()  ::  {
+    error,
+    Uri :: binary(),
+    Args :: list(),
+    KWArgs :: map(),
+    Details :: map()
+}.
 ```
 
 ## Configuration
+
+### Authentication
+
+```mermaid
+sequenceDiagram
+    client -> router: HELLO message
+    router -> client: CHALLENGE message
+    client -> router: AUTHENTICATE (or ABORT message)
+    router -> client: WELCOME (or ABORT message)
+```
+
+The following auth methods are supported (See below an example of the auth configuration):
+- `password`: Password authentication in WAMP involves the use of a username and password. This method is straightforward and relies on the client providing a password that matches the one stored on the server. It’s similar to traditional login methods used in many web applications. The password is send in clear-text and is therefore vulnerable to password “sniffing” attacks, unless the connection is protected by TLS encryption. It should be avoided and replaced by the use of wamp-cra or wamp-scram challenge-response methods if possible.
+- `wampcra`: WAMP-CRA (WAMP Challenge-Response Authentication) is a more secure method compared to plain password authentication. Here’s how it works:
+  - The client sends a “hello” message to the server.
+  - The server responds with a challenge, a unique string.
+  - The client then uses a secret (shared between the client and the server) and the challenge to generate a hashed response.
+  - The server verifies this response using the same secret and challenge. If it matches, the client is authenticated.
+  
+  WAMP-CRA ensures that passwords are not sent over the network, reducing the risk of interception.
+- `crytosign`: it requires **libsodium**!! WAMP-Cryptosign is a WAMP-level authentication mechanism which uses Curve25519-based cryptography - Ed25519 private signing keys. It allows authentication from both sides (client-router and router-client) to prevent MITM attacks. Like TLS, it is a public-key authentication mechanism. In this method:
+  - The client and server both have key pairs (public and private keys).
+  - The client signs authentication messages with its private key.
+  - The server verifies the signature using the client’s public key.
+  - This method provides a very high level of security since it relies on the robustness of cryptographic algorithms and ensures that private keys never need to be transmitted or shared.
+
+  Cryptosign is especially useful in scenarios requiring strong security assurances and is well-suited for environments where public-key infrastructures (PKIs) are used.
+
+These methods cater to different security needs and levels, allowing flexibility in choosing the right one for a given application’s security requirements.
 
 ### Type Spec and structure
 
@@ -76,7 +94,6 @@ Return types
     {peers, #{
         PeerName :: atom() => Peer :: peer()
     }}
-
 ]}
 ```
 
@@ -109,13 +126,21 @@ Return types
             bondy => #{
                 hostname => "localhost",
                 port => 18082,
-                realm => <<"com.magenta.test">>,
-                encoding => erlbin,
+                realm => <<"com.leapsight.test">>,
+                encoding => json,
                 reconnect => true,
                 reconnect_max_retries => 10,
                 reconnect_backoff_min => 500,
                 reconnect_backoff_max => 120000,
-                reconnect_backoff_type => jitter
+                reconnect_backoff_type => jitter,
+                auth => #{
+                    user => <<"john.doe">>,
+                    %% anonymous (default) | password | wampcra | cryptosign
+                    method => wampcra,
+                    secret => <<"123456">>,
+                    pubkey => <<"1766c9e6ec7d7b354fd7a2e4542753a23cae0b901228305621e5b8713299ccdd">>,
+                    privkey => <<"4ffddd896a530ce5ee8c86b83b0d31835490a97a9cd718cb2f09c9fd31c4a7d71766c9e6ec7d7b354fd7a2e4542753a23cae0b901228305621e5b8713299ccdd">>
+                }
             }
         }},
         {defaults, #{
@@ -238,7 +263,8 @@ Return types
     ]},
 
     {awre, [
-        {erlbin_number, 15}
+        {erlbin_number, 15},
+        {agent, my_service}
     ]},
 
     {kernel, [
