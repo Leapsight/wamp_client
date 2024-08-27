@@ -17,7 +17,7 @@
 %% =============================================================================
 {application, wamp_client,[
   {description, "Poorsman's WAMP client"},
-  {vsn, "1.3.0"},
+  {vsn, "1.4.0"},
   {registered, []},
   {mod, {wamp_client_app, []}},
   {applications,
@@ -27,10 +27,6 @@
     sasl,
     jsone,
     msgpack,
-    %% 3rd-party Crypto
-    enacl,
-    pbkdf2,
-    % log_formatter,
     gproc,
     app_config,
     backoff,

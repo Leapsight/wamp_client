@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2024 August
+### Changed
+- Were removed the following dependency libraries:
+    - **enacl**
+    - **pbkdf2**
+    It allows to avoid the NIF for **libsodium**! and we use the Erlang crypto library instead.
+
 ## [1.3.0] - 2024 July
 
 ### Added

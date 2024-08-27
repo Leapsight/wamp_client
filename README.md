@@ -57,7 +57,7 @@ The following auth methods are supported (See below an example of the auth confi
   - The server verifies this response using the same secret and challenge. If it matches, the client is authenticated.
   
   WAMP-CRA ensures that passwords are not sent over the network, reducing the risk of interception.
-- `crytosign`: it requires **libsodium**!! WAMP-Cryptosign is a WAMP-level authentication mechanism which uses Curve25519-based cryptography - Ed25519 private signing keys. It allows authentication from both sides (client-router and router-client) to prevent MITM attacks. Like TLS, it is a public-key authentication mechanism. In this method:
+- `crytosign`: WAMP-Cryptosign is a WAMP-level authentication mechanism which uses Curve25519-based cryptography - Ed25519 private signing keys. It allows authentication from both sides (client-router and router-client) to prevent MITM attacks. Like TLS, it is a public-key authentication mechanism. In this method:
   - The client and server both have key pairs (public and private keys).
   - The client signs authentication messages with its private key.
   - The server verifies the signature using the client’s public key.

@@ -148,7 +148,7 @@ init_per_suite(Config) ->
     % ],
     %% config taken from the environment dev/sys.config
     % ok = application:set_env(Env),
-    {ok, _} = application:ensure_all_started(gproc),
+    % {ok, _} = application:ensure_all_started(gproc),
     {ok, _} = application:ensure_all_started(wamp_client),
     timer:sleep(2000),
     Config.
