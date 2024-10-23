@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] - 2024 October
+### Changed
+- Upgrade awre version to `2.0.0`
+
 ## [1.4.0] - 2024 August
 ### Changed
 - Were removed the following dependency libraries:
