@@ -43,7 +43,12 @@
         reconnect_max_retries => integer(),
         reconnect_backoff_min => integer(),
         reconnect_backoff_max => integer(),
-        reconnect_backoff_type => jitter | normal
+        reconnect_backoff_type => jitter | normal,
+        auth => #{
+            method := anonymous | password | wampcra,
+            user := binary(),
+            secret := binary()
+        }
     }.
 -type handler() :: {module(), atom(), [integer()]} | {function(), [integer()]}.
 -type registrations() ::
@@ -381,7 +386,7 @@ call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc Notice that acknowledge option is not supporte by awre
+%% @doc Notice that acknowledge option is not supported by awre
 %% @end
 %% -----------------------------------------------------------------------------
 -spec publish(
@@ -724,7 +729,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
 
         Class:Reason:Stacktrace ->
             %% @TODO review error handling and URIs
-            ?LOG_DEBUG(#{
+            ?LOG_ERROR(#{
                 mesage => "Error while handling event",
                 subscription_id => SubscriptionId,
                 publication_id => PubId,
@@ -769,7 +774,7 @@ register_all(#state{} = State) ->
                 {ok, _, NewState} ->
                     NewState;
                 {error, Reason, _NewState} ->
-                    ?LOG_INFO(#{
+                    ?LOG_ERROR(#{
                         text => "Error while registering procedure",
                         procedure_uri => Uri,
                         options => Opts
@@ -791,7 +796,7 @@ subscribe_all(State) ->
                 {ok, _, NewState} ->
                     NewState;
                 {error, Reason} ->
-                    ?LOG_INFO(#{
+                    ?LOG_ERROR(#{
                         text => "Error while subscribing",
                         topic_uri => Uri,
                         options => Opts
@@ -914,21 +919,41 @@ connect(#state{router = Router} = State0) ->
     {ok, Conn} = awre:start_client(),
     link(Conn),
 
-    try
-        {ok, SessionId, Details} =
-            awre:connect(Conn, Host, Port, Realm, Encoding),
-        State1 =
-            State0#state{
+    AuthDetails = maps:get(auth, Router, undefined),
+    case connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
+        {ok, SessionId, Details} ->
+            State1 = State0#state{
                 connection = Conn,
                 session_id = SessionId,
                 router_details = Details
             },
-        State2 = on_connect(State1),
-        {ok, State2}
+            State2 = on_connect(State1),
+            {ok, State2};
+        {error, _Reason} = Error ->
+            Error
+    end.
+
+%% @private
+connect(Conn, Host, Port, Realm, Encoding, AuthDetails) ->
+    try awre:connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
+        {ok, _SessionId, _Details} = OK ->
+            OK;
+        {abort, Details, Reason} ->
+            %% examples:
+            %% {abort, #{<<"message">> => <<"Realm does not exist">>}, <<"wamp.error.no_such_realm">>}
+            %% {abort, #{<<"message">> => <<"User 'X' does not exist.">>}, <<"wamp.error.no_such_principal">>}
+            %% {abort, #{<<"message">> => <<"The signature did not match.">>}, <<"wamp.error.authentication_failed">>}
+            %% {abort, #{<<"message">> => <<"The requested authentication methods are not available for this user on this realm.">>, <<"wamp.error.not_auth_method">>}
+            ?LOG_ERROR(#{
+                text => "Failure trying to connect to the WAMP Router",
+                details => Details,
+                reason => Reason
+            }),
+            {error, Reason}
     catch
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
-                text => "Failed to connect to WAMP Router",
+                text => "Unexpected error trying to connect to the WAMP Router",
                 class => Class,
                 reason => Reason,
                 stacktrace => Stacktrace
@@ -938,7 +963,7 @@ connect(#state{router = Router} = State0) ->
 
 %% @private
 on_connect(State0) ->
-    ?LOG_ERROR("Connected ~p", [State0#state.connection]),
+    ?LOG_INFO("~p connected to ~p successfully", [State0#state.peername, State0#state.router]),
     State1 = register_all(State0),
     subscribe_all(State1).
 
@@ -960,16 +985,13 @@ maybe_reconnect(#state{max_retries = N, retry_count = M}) when N < M ->
 maybe_reconnect(#state{backoff = B0, retry_count = N} = State0) ->
     case connect(State0) of
         {ok, State1} ->
-            ?LOG_INFO(#{
-                text => "Connected to router"
-            }),
             {_, B1} = backoff:succeed(B0),
             State2 = State1#state{backoff = B1, retry_count = 0},
             {ok, State2};
         {error, _} ->
             {Time, B1} = backoff:fail(B0),
 
-            ?LOG_INFO(#{
+            ?LOG_WARNING(#{
                 message =>
                     "Failed to connect to WAMP Router, will retry",
                 reconnection_enabled => true,
