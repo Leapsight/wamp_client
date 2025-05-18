@@ -45,9 +45,11 @@
         reconnect_backoff_max => integer(),
         reconnect_backoff_type => jitter | normal,
         auth => #{
-            method := anonymous | password | wampcra,
+            method := anonymous | password | wampcra | cryptosign,
             user := binary(),
-            secret := binary()
+            secret := binary(),
+            pubkey := binary(),
+            privkey := binary()
         }
     }.
 -type handler() :: {module(), atom(), [integer()]} | {function(), [integer()]}.
@@ -67,6 +69,7 @@
     }.
 
 -record(state, {
+    awre_sup_id :: atom(),
     peername :: atom(),
     router :: router(),
     roles :: [wamp_role()],
@@ -83,7 +86,7 @@
     subscription_state = #{} :: subscription_state()
 }).
 
--type do() :: fun(() -> any()) | fun((Peername :: atom()) -> any()) | undefined.
+-type do() :: fun(() -> any()) | fun((PeerName :: atom()) -> any()) | undefined.
 -type wamp_role() :: caller | callee | subscriber | publisher.
 -type result() ::
     {ok, Args :: list(), KWArgs :: map(), Details :: map()}
@@ -96,7 +99,7 @@
 -export_type([error/0]).
 
 %% API
--export([start_link/3]).
+-export([start_link/5]).
 -export([handle_invocation/2]).
 -export([handle_event/2]).
 -export([call/2]).
@@ -128,11 +131,11 @@
 %% API
 %% =============================================================================
 
-start_link(Config, Peername, WorkerName) ->
+start_link(AwreSupId, PeerConfig, GlobalConfig, PeerName, WorkerName) ->
     gen_server:start_link(
         {local, WorkerName},
         ?MODULE,
-        [Peername, WorkerName, Config],
+        [AwreSupId, PeerName, WorkerName, PeerConfig, GlobalConfig],
         []
     ).
 
@@ -141,50 +144,50 @@ start_link(Config, Peername, WorkerName) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec register(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map(),
     Handler :: handler()
 ) -> ok | {error, any()}.
-register(Peername, Uri, Opts, Handler) ->
-    register(Peername, Uri, Opts, Handler, ?TIMEOUT).
+register(PeerName, Uri, Opts, Handler) ->
+    register(PeerName, Uri, Opts, Handler, ?TIMEOUT).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec register(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map(),
     Handler :: handler(),
     Timeout :: integer()
 ) -> ok | {error, any()}.
-register(Peername, Uri, Opts, Handler, Timeout) when is_atom(Peername) ->
-    multi_request(Peername, {register, Uri, Opts, Handler}, Timeout).
+register(PeerName, Uri, Opts, Handler, Timeout) when is_atom(PeerName) ->
+    multi_request(PeerName, {register, Uri, Opts, Handler}, Timeout).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec registration_state(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary()
 ) -> any().
-registration_state(Peername, Uri) ->
-    registration_state(Peername, Uri, ?TIMEOUT).
+registration_state(PeerName, Uri) ->
+    registration_state(PeerName, Uri, ?TIMEOUT).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec registration_state(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Timetout :: timeout()
 ) -> any().
-registration_state(Peername, Uri, Timeout) ->
-    WorkerPid = pick_worker(Peername, Uri),
+registration_state(PeerName, Uri, Timeout) ->
+    WorkerPid = pick_worker(PeerName, Uri),
     gen_server:call(WorkerPid, {registration_state, Uri}, Timeout).
 
 %% -----------------------------------------------------------------------------
@@ -192,150 +195,150 @@ registration_state(Peername, Uri, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec unregister(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary()
 ) -> any().
-unregister(Peername, Uri) ->
-    unregister(Peername, Uri, ?TIMEOUT).
+unregister(PeerName, Uri) ->
+    unregister(PeerName, Uri, ?TIMEOUT).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec unregister(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary() | integer(),
     Timeout :: integer()
 ) -> any().
-unregister(Peername, Uri, Timeout) when is_atom(Peername) ->
-    multi_request(Peername, {unregister, Uri}, Timeout).
+unregister(PeerName, Uri, Timeout) when is_atom(PeerName) ->
+    multi_request(PeerName, {unregister, Uri}, Timeout).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec subscribe(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map(),
     Handler :: handler()
 ) -> any().
-subscribe(Peername, Uri, Opts, Handler) ->
-    subscribe(Peername, Uri, Opts, Handler, ?TIMEOUT).
+subscribe(PeerName, Uri, Opts, Handler) ->
+    subscribe(PeerName, Uri, Opts, Handler, ?TIMEOUT).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec subscribe(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map(),
     Handler :: handler(),
     Timeout :: integer()
 ) -> any().
-subscribe(Peername, Uri, Opts, Handler, Timeout) when is_atom(Peername) ->
-    multi_request(Peername, {subscribe, Uri, Opts, Handler}, Timeout).
+subscribe(PeerName, Uri, Opts, Handler, Timeout) when is_atom(PeerName) ->
+    multi_request(PeerName, {subscribe, Uri, Opts, Handler}, Timeout).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec unsubscribe(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary() | integer()
 ) -> any().
-unsubscribe(Peername, Uri) ->
-    unsubscribe(Peername, Uri, ?TIMEOUT).
+unsubscribe(PeerName, Uri) ->
+    unsubscribe(PeerName, Uri, ?TIMEOUT).
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 -spec unsubscribe(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: integer(),
     Timeout :: integer()
 ) -> any().
-unsubscribe(Peername, Uri, Timeout) when is_atom(Peername) ->
-    multi_request(Peername, {unsubscribe, Uri}, Timeout).
+unsubscribe(PeerName, Uri, Timeout) when is_atom(PeerName) ->
+    multi_request(PeerName, {unsubscribe, Uri}, Timeout).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc Makes an RPC call using the Peer worker instance identified by the
-%% `Peername` argument.
+%% `PeerName` argument.
 %% This argument can be
 %% * the `pid()` of the Peer worker instance
 %% * the
 %% @end
 %% -----------------------------------------------------------------------------
 -spec call(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary()
 ) -> result() | error() | no_return().
 
-call(Peername, Uri) ->
-    call(Peername, Uri, #{}, undefined, undefined).
+call(PeerName, Uri) ->
+    call(PeerName, Uri, #{}, undefined, undefined).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc Makes an RPC call using the Peer worker instance identified by the
-%% `Peername` argument.
+%% `PeerName` argument.
 %% This argument can be
 %% * the `pid()` of the Peer worker instance
 %% * the
 %% @end
 %% -----------------------------------------------------------------------------
 -spec call(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map()
 ) -> result() | error() | no_return().
 
-call(Peername, Uri, Opts) ->
-    call(Peername, Uri, Opts, undefined, undefined).
+call(PeerName, Uri, Opts) ->
+    call(PeerName, Uri, Opts, undefined, undefined).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc Makes an RPC call using the Peer worker instance identified by the
-%% `Peername` argument.
+%% `PeerName` argument.
 %% This argument can be
 %% * the `pid()` of the Peer worker instance
 %% * the
 %% @end
 %% -----------------------------------------------------------------------------
 -spec call(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map(),
     Args :: list()
 ) -> result() | error() | no_return().
 
-call(Peername, Uri, Opts, Args) ->
-    call(Peername, Uri, Opts, Args, undefined).
+call(PeerName, Uri, Opts, Args) ->
+    call(PeerName, Uri, Opts, Args, undefined).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc Makes an RPC call using the Peer worker instance identified by the
-%% `Peername` argument.
+%% `PeerName` argument.
 %% This argument can be
 %% * the `pid()` of the Peer worker instance
 %% * the
 %% @end
 %% -----------------------------------------------------------------------------
 -spec call(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Uri :: binary(),
     Opts :: map(),
     Args :: list(),
     KWArgs :: map()
 ) -> result() | error() | no_return().
 
-call(Peername, Uri, Opts, Args, KWArgs) when is_atom(Peername) ->
-    call({Peername, Uri}, Uri, Opts, Args, KWArgs);
+call(PeerName, Uri, Opts, Args, KWArgs) when is_atom(PeerName) ->
+    call({PeerName, Uri}, Uri, Opts, Args, KWArgs);
 
-call({Peername, Term}, Uri, Opts, Args, KWArgs) when is_atom(Peername) ->
-    WorkerPid = pick_worker(Peername, Term),
+call({PeerName, Term}, Uri, Opts, Args, KWArgs) when is_atom(PeerName) ->
+    WorkerPid = pick_worker(PeerName, Term),
     call(WorkerPid, Uri, Opts, Args, KWArgs);
 
 call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
@@ -390,16 +393,16 @@ call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec publish(
-    Peername :: atom() | {atom(), term()} | pid(),
+    PeerName :: atom() | {atom(), term()} | pid(),
     Topic :: binary(),
     Args :: [any()],
     KWArgs :: map(),
     Opts :: map()
 ) -> ok | error() | no_return().
-publish(Peername, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
-    publish({Peername, Uri}, Uri, Args, KWArgs, Opts);
-publish({Peername, Term}, Uri, Args, KWArgs, Opts) when is_atom(Peername) ->
-    WorkerPid = pick_worker(Peername, Term),
+publish(PeerName, Uri, Args, KWArgs, Opts) when is_atom(PeerName) ->
+    publish({PeerName, Uri}, Uri, Args, KWArgs, Opts);
+publish({PeerName, Term}, Uri, Args, KWArgs, Opts) when is_atom(PeerName) ->
+    WorkerPid = pick_worker(PeerName, Term),
     publish(WorkerPid, Uri, Args, KWArgs, Opts);
 publish(WorkerPid, Uri, Args, KWArgs, Opts) when
     is_pid(WorkerPid) andalso
@@ -432,32 +435,33 @@ publish(WorkerPid, Uri, Args, KWArgs, Opts) when
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
-info(Peername) when is_atom(Peername) ->
-    gproc_pool:defined_workers(Peername).
+info(PeerName) when is_atom(PeerName) ->
+    gproc_pool:defined_workers(PeerName).
 
 %% =============================================================================
 %% GEN_SERVER CALLBACKS
 %% =============================================================================
 
-init([Peername, WorkerName, Config]) ->
+init([AwreSupId, PeerName, WorkerName, PeerConfig, Config]) ->
     process_flag(trap_exit, true),
 
-    Router = get_router(Config),
+    Router = get_router(PeerConfig, Config),
 
     State =
         #state{
-            peername = Peername,
+            awre_sup_id = AwreSupId,
+            peername = PeerName,
             router = Router,
             backoff = init_backoff(Router),
             max_retries = maps:get(reconnect_max_retries, Router, 10),
-            registrations = process_registrations(Config),
-            subscriptions = process_subscriptions(Config)
+            registrations = process_registrations(PeerConfig, Config),
+            subscriptions = process_subscriptions(PeerConfig, Config)
         },
 
     %% We add the worker to the gproc pool
     true = gproc:reg({n, l, WorkerName}),
-    _ = gproc_pool:add_worker(Peername, WorkerName),
-    _ = gproc_pool:connect_worker(Peername, WorkerName),
+    _ = gproc_pool:add_worker(PeerName, WorkerName),
+    _ = gproc_pool:connect_worker(PeerName, WorkerName),
 
     {ok, State, {continue, connect}}.
 
@@ -574,7 +578,7 @@ handle_invocation({invocation, ReqId, RegId, Details, Args}, State) ->
 
 handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     Conn = State#state.connection,
-    Peername = State#state.peername,
+    PeerName = State#state.peername,
 
     #{RegId := #{handler := Handler}} = State#state.registration_state,
 
@@ -590,20 +594,20 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
     try
         case apply_callback(Handler, Details, Args, KWArgs) of
             {ok, RArgs, RKWArgs, RDetails} ->
-                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, undefined, Peername);
+                ok = reply_yield(Conn, ReqId, RDetails, RArgs, RKWArgs, undefined, PeerName);
 
             {ok, RArgs, RKWArgs, RDetails, Fun} ->
                 ok = reply_yield(
-                    Conn, ReqId, RDetails, RArgs, RKWArgs, Fun, Peername
+                    Conn, ReqId, RDetails, RArgs, RKWArgs, Fun, PeerName
                 );
 
             {error, RUri, RArgs, RKWArgs, RDetails} ->
                 ok = reply_error(
-                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, undefined, Peername
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, undefined, PeerName
                 );
             {error, RUri, RArgs, RKWArgs, RDetails, Fun} ->
                 ok = reply_error(
-                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, Fun, Peername
+                    Conn, ReqId, RDetails, RUri, RArgs, RKWArgs, Fun, PeerName
                 )
         end
     catch
@@ -628,8 +632,7 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                         )
                 },
             EUri = <<"wamp.error.invalid_argument">>,
-
-            awre:error(Conn, ReqId, #{}, EUri, [Error], #{});
+            awre:error(Conn, ReqId, Error, EUri, Args, KWArgs);
 
         Class:Reason:Stacktrace ->
             ?LOG_ERROR(#{
@@ -649,26 +652,37 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
                 description =>
                     <<"There was an internal error, please contact the administrator.">>
             },
-            EUri = wamp_client_config:get(
-                [error_uris, internal_error],
-                <<"com.myservice.error.internal">>
-            ),
-            awre:error(Conn, ReqId, #{}, EUri, [Error], #{})
+            EUri = internal_error_uri(),
+            awre:error(Conn, ReqId, Error, EUri, Args, KWArgs)
     end.
 
 
 %% @private
-reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun, Peername)
-when is_list(Args), is_map(KWArgs), is_map(Details) ->
-    ok = awre:yield(Conn, ReqId, Details, Args, KWArgs),
-    ok = maybe_apply_fun(Fun, Peername).
+internal_error_uri() ->
+    Key = {?MODULE, internal_error_uri},
+    case persistent_term:get(Key, undefined) of
+        undefined ->
+            ErrorUris = application:get_env(wamp_client, error_uris, #{}),
+            InternalErrorUri = key_value:get(internal_error, ErrorUris, <<"com.myservice.error.internal">>),
+            _ = persistent_term:put(Key, InternalErrorUri),
+            InternalErrorUri;
+        InternalErrorUri ->
+            InternalErrorUri
+    end.
 
 
 %% @private
-reply_error(Conn, ReqId, Details, Uri, Args, KWArgs, Fun, Peername)
+reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun, PeerName)
+when is_list(Args), is_map(KWArgs), is_map(Details) ->
+    ok = awre:yield(Conn, ReqId, Details, Args, KWArgs),
+    ok = maybe_apply_fun(Fun, PeerName).
+
+
+%% @private
+reply_error(Conn, ReqId, Details, Uri, Args, KWArgs, Fun, PeerName)
 when is_binary(Uri), is_list(Args), is_map(KWArgs), is_map(Details) ->
     ok = awre:error(Conn, ReqId, Details, Uri, Args, KWArgs),
-    ok = maybe_apply_fun(Fun, Peername).
+    ok = maybe_apply_fun(Fun, PeerName).
 
 
 %% @private
@@ -679,8 +693,8 @@ maybe_apply_fun(Fun, _) when is_function(Fun, 0) ->
     catch Fun(),
     ok;
 
-maybe_apply_fun(Fun, Peername) when is_function(Fun, 1) ->
-    catch Fun(Peername),
+maybe_apply_fun(Fun, PeerName) when is_function(Fun, 1) ->
+    catch Fun(PeerName),
     ok.
 
 
@@ -725,7 +739,7 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                         )
                 },
             RUri = <<"wamp.error.invalid_argument">>,
-            awre:error(Conn, PubId, #{}, RUri, [Error], #{});
+            awre:error(Conn, PubId, Error, RUri, Args, KWArgs);
 
         Class:Reason:Stacktrace ->
             %% @TODO review error handling and URIs
@@ -748,11 +762,8 @@ handle_event({event, SubscriptionId, PubId, Details, Args, KWArgs}, State) ->
                     description =>
                         <<"There was an internal error, please contact the administrator.">>
                 },
-            RUri = wamp_client_config:get(
-                [error_uris, internal_error],
-                <<"com.myservice.error.internal">>
-            ),
-            awre:error(Conn, PubId, #{}, RUri, [Error], #{})
+            RUri = internal_error_uri(),
+            awre:error(Conn, PubId, Error, RUri, Args, KWArgs)
     end.
 
 apply_callback({Mod, Fun, Arities}, Details, Args, KWArgs) ->
@@ -908,7 +919,7 @@ do_unsubscribe(Id, #state{} = State) ->
     end.
 
 %% @private
-connect(#state{router = Router} = State0) ->
+connect(#state{router = Router, awre_sup_id = AwreSupId} = State0) ->
     #{
         hostname := Host,
         port := Port,
@@ -916,7 +927,7 @@ connect(#state{router = Router} = State0) ->
         encoding := Encoding
     } = Router,
 
-    {ok, Conn} = awre:start_client(),
+    {ok, Conn} = awre:start_client(AwreSupId),
     link(Conn),
 
     AuthDetails = maps:get(auth, Router, undefined),
@@ -1037,11 +1048,11 @@ to_handler_args(Details, Args, KWArgs, Arities) ->
 
 
 
-get_router(#{router := RouterName}) ->
-    wamp_client_config:get([routers, RouterName]);
-get_router(_) ->
-    Default = wamp_client_config:get([defaults, router]),
-    wamp_client_config:get([routers, Default]).
+get_router(#{router := RouterName}, Config) ->
+    key_value:get([routers, RouterName], Config);
+get_router(_, Config) ->
+    Default = key_value:get([defaults, router], Config),
+    key_value:get([routers, Default], Config).
 
 init_backoff(Router) ->
     case maps:get(reconnect, Router, false) of
@@ -1057,21 +1068,16 @@ init_backoff(Router) ->
             undefined
     end.
 
-process_registrations(#{roles := #{callee := #{registrations := Map}}}) ->
-    DefaultOpts =
-        wamp_client_config:get([defaults, callee], ?DEFAULT_REGISTER_OPTS),
+process_registrations(#{roles := #{callee := #{registrations := Map}}}, Config) ->
+    DefaultOpts = key_value:get([defaults, callee], Config, ?DEFAULT_REGISTER_OPTS),
     process_callback_handlers(Map, DefaultOpts);
-process_registrations(_) ->
+process_registrations(_, _) ->
     #{}.
 
-process_subscriptions(#{roles := #{subscriber := #{subscriptions := Map}}}) ->
-    DefaultOpts =
-        wamp_client_config:get(
-            [defaults, subscriber],
-            ?DEFAULT_SUBSCRIBE_OPTS
-        ),
+process_subscriptions(#{roles := #{subscriber := #{subscriptions := Map}}}, Config) ->
+    DefaultOpts = key_value:get([defaults, subscriber], Config, ?DEFAULT_SUBSCRIBE_OPTS),
     process_callback_handlers(Map, DefaultOpts);
-process_subscriptions(_) ->
+process_subscriptions(_, _) ->
     #{}.
 
 process_callback_handlers(Map, DefaultOpts) ->
@@ -1133,36 +1139,36 @@ validate_handler(Handler) ->
     ?LOG_ERROR("Invalid handler ~p", [Handler]),
     throw(invalid_handler).
 
-pick_worker(Peername, Term) ->
-    case gproc:get_value({p, l, {gproc_pool, Peername}}, shared) of
+pick_worker(PeerName, Term) ->
+    case gproc:get_value({p, l, {gproc_pool, PeerName}}, shared) of
         {_, Type} when Type == round_robin; Type == random ->
-            do_pick_worker(Peername);
+            do_pick_worker(PeerName);
         {_, Type} when Type == hash orelse Type == direct andalso is_integer(Term) ->
-            do_pick_worker(Peername, Term);
+            do_pick_worker(PeerName, Term);
         {_, Type} when Type == hash ->
-            do_pick_worker(Peername, Term);
+            do_pick_worker(PeerName, Term);
         {_, _} ->
-            error({badarg, {Peername, Term}})
+            error({badarg, {PeerName, Term}})
     end.
 
-do_pick_worker(Peername) ->
-    case gproc_pool:pick(Peername) of
-        {n, l, [gproc_pool, Peername, _, _]} = Id ->
+do_pick_worker(PeerName) ->
+    case gproc_pool:pick(PeerName) of
+        {n, l, [gproc_pool, PeerName, _, _]} = Id ->
             log_and_return(Id);
         false ->
             undefined
     end.
 
-do_pick_worker(Peername, Term) ->
-    case gproc_pool:pick(Peername, Term) of
-        {n, l, [gproc_pool, Peername, _, _]} = Id ->
+do_pick_worker(PeerName, Term) ->
+    case gproc_pool:pick(PeerName, Term) of
+        {n, l, [gproc_pool, PeerName, _, _]} = Id ->
             log_and_return(Id);
         false ->
             undefined
     end.
 
-log_and_return({n, l, [gproc_pool, Peername, _, Name]} = Id) ->
-    Pid = gproc_pool:whereis_worker(Peername, Name),
+log_and_return({n, l, [gproc_pool, PeerName, _, Name]} = Id) ->
+    Pid = gproc_pool:whereis_worker(PeerName, Name),
     _ = gproc_pool:log(Id),
     Pid.
 
@@ -1179,11 +1185,11 @@ format_arity('or', L0) ->
 
 
 
-multi_request(Peername, Request, Timeout) ->
+multi_request(PeerName, Request, Timeout) ->
     Refs =
         [
             {gen_server:send_request(Pid, Request), Pid}
-         || {_, Pid} <- gproc_pool:active_workers(Peername)
+         || {_, Pid} <- gproc_pool:active_workers(PeerName)
         ],
 
     Acc0 = maps:from_list([{Pid, undefined} || {_, Pid} <- Refs]),

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.3] - 2025 January
+### Changed
+- Updated error responses to inform the error data as `details` instead of include it in `args`. 
+This change is needed for consistency with `wamp_service` the error is returned as `details` when an exception is processed
+
+
 ## [1.4.2] - 2024 October
 ### Changed
 - Upgrade awre version to `2.0.1`: Normalizes an Ed25519 private key to ensure it is in the 32-byte format required for signing operations, accepting either a 32-byte or 64-byte binary key.

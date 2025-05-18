@@ -122,6 +122,8 @@ These methods cater to different security needs and levels, allowing flexibility
 [
     %% service conf
     {wamp_client, [
+        {erlbin_number, 15},
+        {agent, my_service}
         {routers, #{
             bondy => #{
                 hostname => "localhost",
@@ -260,11 +262,6 @@ These methods cater to different security needs and levels, allowing flexibility
                 }
             }
         }}
-    ]},
-
-    {awre, [
-        {erlbin_number, 15},
-        {agent, my_service}
     ]},
 
     {kernel, [

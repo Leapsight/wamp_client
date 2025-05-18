@@ -15,25 +15,23 @@
 %%  See the License for the specific language governing permissions and
 %%  limitations under the License.
 %% =============================================================================
-{application, wamp_client,[
-  {description, "Poorsman's WAMP client"},
-  {vsn, "1.4.2"},
-  {registered, []},
-  {mod, {wamp_client_app, []}},
-  {applications,
-   [kernel,
-    stdlib,
-    crypto,
-    sasl,
-    jsone,
-    msgpack,
-    gproc,
-    app_config,
-    backoff,
-    wamper,
-    awre]},
-  {env, []},
-  {modules, []},
-  {maintainers, []},
-  {licenses, []},
-  {links, []}]}.
+{application, wamp_client, [
+    {description, "Poorsman's WAMP client"},
+    {vsn, "2.0.0"},
+    {registered, []},
+    {mod, {wamp_client_app, []}},
+    {applications, [kernel,
+        stdlib,
+        crypto,
+        sasl,
+        msgpack,
+        gproc,
+        backoff,
+        wamper]
+    },
+    {env, []},
+    {modules, []},
+    {maintainers, []},
+    {licenses, ["Apache 2.0"]},
+    {links, []}]
+}.

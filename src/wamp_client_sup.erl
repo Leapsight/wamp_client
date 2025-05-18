@@ -20,75 +20,103 @@
 
 -behaviour(supervisor).
 
--define(SERVER, ?MODULE).
--define(SUPERVISOR(Id, Mod, Args, Restart, Timeout), #{
-    id => Id,
-    start => {Mod, start_link, Args},
-    restart => Restart,
-    shutdown => Timeout,
-    type => supervisor,
-    modules => [Mod]
-}).
--define(WORKER(Id, Mod, Args, Restart, Timeout), #{
-    id => Id,
-    start => {Mod, start_link, Args},
-    restart => Restart,
-    shutdown => Timeout,
-    type => worker,
-    modules => [Mod]
-}).
--define(EVENT_MANAGER(Id, Restart, Timeout), #{
-    id => Id,
-    start => {gen_event, start_link, [{local, Id}]},
-    restart => Restart,
-    shutdown => Timeout,
-    type => worker,
-    modules => [dynamic]
-}).
+-include("supervision_spec.hrl").
 
 %% API
--export([start_link/0]).
-%% Supervisor callbacks
+-export([start_link/1]).
+-export([start_link/2]).
+
+%% SUPERVISOR CALLBACKS
 -export([init/1]).
 
-%%====================================================================
-%% API functions
-%%====================================================================
 
-start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 %%====================================================================
-%% Supervisor callbacks
+%% API
 %%====================================================================
 
-%% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
-init([]) ->
-    Peers = wamp_client_config:get(peers, #{}),
 
-    Children =
-        maps:fold(
-            fun(Name, Peer, Acc) ->
-                Id = list_to_atom(
-                    "wamp_client_peer_sup-" ++
-                        atom_to_list(Name)
-                ),
-                Sup = ?SUPERVISOR(
-                    Id,
-                    wamp_client_peer_sup,
-                    [Id, Name, Peer],
-                    permanent,
-                    5000
-                ),
-                [Sup | Acc]
-            end,
-            [],
-            Peers
-        ),
+
+%% -----------------------------------------------------------------------------
+%% @doc It initialises wamp_client configuration
+%% @param Config The configuration for the wamp_client
+%% @return {ok, pid()} if the supervisor started successfully
+%% @return {error, term()} if the supervisor failed to start
+%% @end
+%% -----------------------------------------------------------------------------
+start_link(Config) ->
+    _ = application:ensure_all_started(gproc, permanent),
+    supervisor:start_link({local, ?MODULE}, ?MODULE, [Config]).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc It initialises wamp_client configuration for the given Id
+%% @param Id The unique identifier for the wamp_client
+%% @param Config The configuration for the wamp_client
+%% @return {ok, pid()} if the supervisor started successfully
+%% @return {error, term()} if the supervisor failed to start
+%% @end
+%% -----------------------------------------------------------------------------
+-spec start_link(atom(), map()) -> {ok, pid()} | {error, term()}.
+start_link(Id, Config) ->
+    _ = application:ensure_all_started(gproc, permanent),
+    SupId = wamp_client_utils:build_registration_name([Id, ?MODULE]),
+    supervisor:start_link({local, SupId}, ?MODULE, [Id, Config]).
+
+
+
+%%====================================================================
+%% SUPERVISOR CALLBACKS
+%%====================================================================
+
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec init([any()]) -> {ok, {supervisor:strategy(), [supervisor:child_spec()]}}.
+init([Id, Config]) ->
+    Peers = key_value:get(peers, Config, #{}),
+
+    %% Create the supervisor for the awre_con
+    AwreSupId = wamp_client_utils:build_registration_name([Id, awre_sup]),
+    AwreSupChild = ?SUPERVISOR(
+        AwreSupId,
+        awre_sup,
+        [AwreSupId],
+        permanent,
+        5000
+    ),
+
+    %% Create the supervisor for the wamp_client_peer
+    PeerChildren = maps:fold(
+        fun(Name, PeerConfig, Acc) ->
+            PeerSupId = wamp_client_utils:build_registration_name([Id, wamp_client_peer_sup, Name]),
+            PeerName = wamp_client_utils:build_registration_name([Id, Name]),
+            PeerSup = ?SUPERVISOR(
+                PeerSupId,
+                wamp_client_peer_sup,
+                [AwreSupId, PeerSupId, PeerName, PeerConfig, Config],
+                permanent,
+                5000
+            ),
+            [PeerSup | Acc]
+        end,
+        [],
+        Peers
+    ),
+
+    Children = [AwreSupChild | PeerChildren],
 
     Specs = {{one_for_one, 5, 60}, Children},
-    {ok, Specs}.
+    {ok, Specs};
 
-%%====================================================================
-%% Internal functions
-%%====================================================================
+init([Config]) ->
+    init([undefined, Config]).
+
+
+
+%% =============================================================================
+%% PRIVATE
+%% =============================================================================

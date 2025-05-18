@@ -44,117 +44,12 @@ end_per_group(_, _Config) ->
     ok.
 
 init_per_suite(Config) ->
-    % Env = [
-    %     {wamp_client, [
-    %         {routers, #{
-    %             bondy => #{
-    %                 hostname => "localhost",
-    %                 port => 18082,
-    %                 %% move on peer
-    %                 realm => <<"com.wamp_client.test">>,
-    %                 %% bondy
-    %                 encoding => erlbin,
-    %                 reconnect => true,
-    %                 reconnect_max_retries => 10,
-    %                 reconnect_backoff_min => 500,
-    %                 reconnect_backoff_max => 120000,
-    %                 reconnect_backoff_type => jitter
-    %             }
-    %         }},
-    %         {defaults, #{
-    %             router => bondy,
-    %             caller => #{
-    %                 features => #{
-    %                     progressive_call_results => false,
-    %                     progressive_calls => false,
-    %                     call_timeout => true,
-    %                     call_canceling => false,
-    %                     caller_identification=> true,
-    %                     call_retries => true
-    %                 },
-    %                 options => #{
-    %                     timeout => 15000,
-    %                     disclose_me => true
-    %                 }
-    %             },
-    %             callee => #{
-    %                 features => #{
-    %                     progressive_call_results => false,
-    %                     progressive_calls => false,
-    %                     call_timeout => true,
-    %                     call_canceling => false,
-    %                     caller_identification => true,
-    %                     call_trustlevels => true,
-    %                     registration_revocation => true,
-    %                     session_meta_api => true,
-    %                     pattern_based_registration => true,
-    %                     shared_registration => true,
-    %                     sharded_registration => true
-    %                 },
-    %                 options => #{
-    %                     disclose_caller => true,
-    %                     invoke => roundrobin
-    %                 }
-    %             },
-    %             publisher => #{
-    %                 features => #{
-    %                     message_retention => true,
-    %                     publisher_exclusion => true,
-    %                     publisher_identification => true,
-    %                     subscriber_blackwhite_listing => true
-    %                 }
-    %             },
-    %             subscriber => #{
-    %                 features => #{
-    %                     event_history => false,
-    %                     pattern_based_subscription => true,
-    %                     publication_trustlevels => true,
-    %                     publisher_identification => true,
-    %                     sharded_subscription => true
-    %                 }
-    %             }
-    %         }},
-    %         {peers, #{
-    %             default => #{
-    %                 router => bondy,
-    %                 pool_size => 3,
-    %                 pool_type => hash,
-    %                 roles => #{
-    %                     caller => #{},
-    %                     publisher => #{},
-    %                     callee => #{
-    %                         features => #{},
-    %                         registrations => #{
-    %                             % %% CHANGE LOG AUDIT
-    %                             % <<"com.thing.system.change_log.match">> => #{
-    %                             %     options => #{
-    %                             %         disclose_caller => true,
-    %                             %         invoke => roundrobin
-    %                             %     },
-    %                             %     handler =>  {
-    %                             %         account_service_change_log_api, match
-    %                             %     }
-    %                             % }
-    %                         }
-    %                     },
-    %                     subscriber => #{
-    %                         features => #{},
-    %                         subscriptions => #{}
-    %                     }
-    %                 }
-    %             }
-    %         }}
-    %     ]}
-    % ],
-    %% config taken from the environment dev/sys.config
-    % ok = application:set_env(Env),
-    % {ok, _} = application:ensure_all_started(gproc),
     {ok, _} = application:ensure_all_started(wamp_client),
     timer:sleep(2000),
     Config.
 
 end_per_suite(_Config) ->
-    % application:stop(wamp_client).
+    application:stop(wamp_client),
     ok.
 
 echo_test(_) ->
