@@ -931,7 +931,8 @@ connect(#state{router = Router, awre_sup_id = AwreSupId} = State0) ->
     link(Conn),
 
     AuthDetails = maps:get(auth, Router, undefined),
-    case connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
+    TlsEnabled = maps:get(tls, Router, false),
+    case connect(Conn, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled) of
         {ok, SessionId, Details} ->
             State1 = State0#state{
                 connection = Conn,
@@ -945,8 +946,8 @@ connect(#state{router = Router, awre_sup_id = AwreSupId} = State0) ->
     end.
 
 %% @private
-connect(Conn, Host, Port, Realm, Encoding, AuthDetails) ->
-    try awre:connect(Conn, Host, Port, Realm, Encoding, AuthDetails) of
+connect(Conn, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled) ->
+    try awre:connect(Conn, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled) of
         {ok, _SessionId, _Details} = OK ->
             OK;
         {abort, Details, Reason} ->

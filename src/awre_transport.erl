@@ -20,26 +20,25 @@
 %% SOFTWARE.
 %%
 
-
 -module(awre_transport).
 
 -export([init/1]).
 
 
--callback init(Args :: map()) -> {ok,State :: any()}.
+-callback init(Args :: map()) -> {ok, State :: any()}.
 -callback send_to_router(Message :: term(), State :: any()) -> {ok, NewState :: any()}.
 -callback handle_info(Data :: any(), State :: any()) -> {ok, NewState :: any()}.
 -callback shutdown(State :: any()) -> ok.
 
 
-
 init(Args) ->
-  #{host := Host} = Args,
-  Module = case Host == undefined of
-             true ->
-               awre_trans_local;
-             false ->
-               awre_trans_tcp
-           end,
-  {ok,State} = Module:init(Args),
-  {Module,State}.
+    #{host := Host} = Args,
+    Module = case Host == undefined of
+        true ->
+            awre_trans_local;
+        false ->
+            %% Both TCP and TLS are now handled by the same module
+            awre_trans_tcp
+    end,
+    {ok, State} = Module:init(Args),
+    {Module, State}.

@@ -191,7 +191,13 @@ handle_message_from_client(
 ) ->
     handle_message_from_client({connect, Host, Port, Realm, Encoding, undefined}, From, State);
 handle_message_from_client(
-    {connect, Host, Port, Realm, Encoding, AuthDetails} = Msg,
+    {connect, Host, Port, Realm, Encoding, AuthDetails},
+    From,
+    #state{transport = {_, _}} = State
+) ->
+    handle_message_from_client({connect, Host, Port, Realm, Encoding, AuthDetails, false}, From, State);
+handle_message_from_client(
+    {connect, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled} = Msg,
     From,
     #state{transport = {T, _}} = State
 ) ->
@@ -202,7 +208,8 @@ handle_message_from_client(
         realm => Realm,
         enc => Encoding,
         version => awre:get_version(),
-        client_details => ?CLIENT_DETAILS
+        client_details => ?CLIENT_DETAILS,
+        tls => TlsEnabled
     },
     Args =
         case AuthDetails of
