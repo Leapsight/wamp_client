@@ -36,6 +36,11 @@ All notable changes to this project will be documented in this file. This projec
   - `transport_integration_SUITE.erl` - End-to-end integration tests
   - `test_transport.sh` - Automated test runner with detailed reporting
   - Mock servers supporting both TCP and TLS protocols for testing
+- **Security Enhancements**:
+  - `wamp_client_sensitive.erl` - Comprehensive sensitive data protection module
+  - Authentication details are now automatically wrapped to prevent exposure in logs, crash dumps, and debugging output
+  - Sensitive data wrapping/unwrapping utilities with backward compatibility
+  - Enhanced `format_status/1` callbacks to sanitize state data in status reports
 
 ### Changed
 - Upgraded minimum OTP version to 27.0
@@ -70,6 +75,12 @@ All notable changes to this project will be documented in this file. This projec
   - Fixed transport selection logic for TCP vs TLS
   - Improved certificate validation and SSL option handling
   - Enhanced error reporting for TLS connection failures
+- **Security Fixes**:
+  - Fixed double-wrapping of sensitive authentication data that caused function_clause errors
+  - Resolved `wamp_client_sensitive:unwrap/1` handling of already-wrapped data
+  - Fixed deprecated `format_status/2` callbacks to use modern `format_status/1` format
+  - Corrected authentication flow to properly unwrap sensitive data before use
+  - Enhanced sensitive data protection to prevent accidental exposure in error messages
 
 ### Migration Guide
 This is a major version upgrade with breaking changes:

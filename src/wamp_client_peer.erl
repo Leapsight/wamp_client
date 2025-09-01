@@ -126,6 +126,7 @@
 -export([handle_info/2]).
 -export([terminate/2]).
 -export([code_change/3]).
+-export([format_status/1]).
 
 %% =============================================================================
 %% API
@@ -974,8 +975,19 @@ connect(Conn, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled) ->
     end.
 
 %% @private
-on_connect(State0) ->
-    ?LOG_INFO("~p connected to ~p successfully", [State0#state.peername, State0#state.router]),
+on_connect(#state{router = Router, peername = Peername} = State0) ->
+    #{
+        hostname := Host,
+        port := Port,
+        realm := Realm
+    } = Router,
+    ?LOG_INFO(#{
+        text => "Connected to WAMP Router",
+        peername => Peername,
+        hostname => Host,
+        port => Port,
+        realm => Realm
+    }),
     State1 = register_all(State0),
     subscribe_all(State1).
 
@@ -1229,3 +1241,19 @@ multi_request(PeerName, Request, Timeout) ->
         {abort, Reason} ->
             {error, Reason}
     end.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Sanitizes the state for status reports and crash dumps by removing
+%% sensitive authentication details.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec format_status(Status) -> NewStatus when
+    Status :: #{state => term(), log => [sys:log_entry()]},
+    NewStatus :: #{state => term(), log => [sys:log_entry()]}.
+
+format_status(#{state := #state{router = Router} = State} = Status) ->
+    %% Remove auth details from router config to prevent logging sensitive data
+    SafeRouter = maps:without([auth], Router),
+    SafeState = State#state{router = SafeRouter},
+    Status#{state => SafeState}.

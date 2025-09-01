@@ -4,4 +4,5 @@ REBAR ?= rebar3
 
 test:
 	clear
-	${REBAR} test
+	${REBAR} eunit
+	${REBAR} ct

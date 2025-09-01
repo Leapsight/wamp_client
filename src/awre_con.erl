@@ -44,6 +44,7 @@
 -export([handle_info/2]).
 -export([terminate/2]).
 -export([code_change/3]).
+-export([format_status/1]).
 
 -define(CLIENT_DETAILS, #{
     callee => #{features => #{}},
@@ -608,3 +609,19 @@ stop_timeout(Reason, State) ->
         )
     }),
     {stop, timeout, State#state{ping_sent = false}}.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Sanitizes the state for status reports and crash dumps.
+%% Although this module doesn't directly store auth details, this callback
+%% provides a safety net for any future sensitive data.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec format_status(Status) -> NewStatus when
+    Status :: #{state => term(), log => [sys:log_entry()]},
+    NewStatus :: #{state => term(), log => [sys:log_entry()]}.
+
+format_status(#{state := State} = Status) ->
+    %% State record doesn't currently contain sensitive data, but we provide
+    %% this callback as a safety measure and for consistency
+    Status#{state => State}.

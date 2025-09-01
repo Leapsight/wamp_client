@@ -24,19 +24,19 @@
 -behaviour(awre_transport).
 -include_lib("kernel/include/logger.hrl").
 
-% <<0:5, 1:3>>
--define(RAW_PING_PREFIX, 1).
-% <<0:5, 2:3>>
--define(RAW_PONG_PREFIX, 2).
+-define(CONNECT_TIMEOUT, 5000).
+-define(CONNECT_OPTIONS(Family), [binary, {packet, 0}, Family]).
 
+%% API
+-export([handle_info/2]).
 -export([init/1]).
 -export([send_to_router/2]).
--export([handle_info/2]).
 -export([shutdown/1]).
 
 -record(state, {
     awre_con = unknown,
     socket = none,
+    transport = undefined,  %% tcp | tls
     enc = unknown,
     sernum = unknown,
     realm = none,
@@ -54,6 +54,20 @@
     auth_details = none
 }).
 
+
+
+%% =============================================================================
+%% PUBLIC API
+%% =============================================================================
+
+
+
+%% ----------------------------------------------------------------------------
+%% @doc Initializes the TCP transport and connects to the router
+%% @end
+%% ----------------------------------------------------------------------------
+-spec init(map()) -> {ok, #state{}} | {error, term()}.
+
 init(
     #{
         realm := Realm,
@@ -65,162 +79,188 @@ init(
         enc := Encoding
     } = Args
 ) ->
-    Family =
-        case application:get_env(awre, ip_version, 4) of
-            6 ->
-                inet6;
-            _ ->
-                %% 4 or invalid value
-                inet
-        end,
-    {ok, Socket} = gen_tcp:connect(Host, Port, [binary, {packet, 0}, Family], 5000),
-    link(Socket),
-    % need to send the new TCP packet
-    Enc =
-        case Encoding of
-            json -> raw_json;
-            raw_json -> raw_json;
-            msgpack -> raw_msgpack;
-            raw_msgpack -> raw_msgpack;
-            erlbin -> raw_erlbin;
-            raw_erlbin -> raw_erlbin;
-            _ -> raw_msgpack
-        end,
-    SerNum =
-        case Enc of
-            raw_json ->
-                1;
-            raw_msgpack ->
-                2;
-            raw_erlbin ->
-                EBinNumber = application:get_env(wamp_client, erlbin_number, undefined),
-                case {is_integer(EBinNumber), EBinNumber > 0} of
-                    {true, true} -> EBinNumber;
-                    _ -> error("application parameter erlbin_number not set")
-                end;
-            _ ->
-                0
-        end,
-    MaxLen = 15,
-    ok = gen_tcp:send(Socket, <<127, MaxLen:4, SerNum:4, 0, 0>>),
-    State = #state{
-        awre_con = Con,
-        version = Version,
-        client_details = CDetails,
-        socket = Socket,
-        enc = Enc,
-        sernum = SerNum,
-        realm = Realm,
-        %% in case of authentication configuration is provided
-        auth_details = maps:get(auth_details, Args, undefined)
-    },
-    {ok, State}.
-
-send_to_router({ping, Payload}, #state{socket = S} = State) ->
-    Frame = <<(?RAW_PING_PREFIX):8, (byte_size(Payload)):24, Payload/binary>>,
-    ok = gen_tcp:send(S, Frame),
-    {ok, State};
-send_to_router({pong, Payload}, #state{socket = S} = State) ->
-    Frame = <<(?RAW_PONG_PREFIX):8, (byte_size(Payload)):24, Payload/binary>>,
-    ok = gen_tcp:send(S, Frame),
-    {ok, State};
-%% Authenticates using password
-send_to_router({challenge, password}, State) ->
-    Password = maps:get(secret, State#state.auth_details, <<>>),
-    Signature = handle_challenge(password, Password),
-    Message = {authenticate, Signature, #{}},
-    send_to_router(Message, State);
-%% Authenticates using WAMP-CRA
-send_to_router({challenge, wampcra, AuthExtra}, State) ->
-    Password = maps:get(secret, State#state.auth_details, <<>>),
-    Signature = handle_challenge(wampcra, Password, AuthExtra),
-    Message = {authenticate, Signature, #{}},
-    send_to_router(Message, State);
-%% Authenticates using cryptosign
-send_to_router({challenge, cryptosign, AuthExtra}, State) ->
-    PubKey = maps:get(pubkey, State#state.auth_details, <<>>),
-    PrivKey = maps:get(privkey, State#state.auth_details, <<>>),
-    Signature = handle_challenge(cryptosign, {PubKey, PrivKey}, AuthExtra),
-    Message = {authenticate, Signature, #{}},
-    send_to_router(Message, State);
-send_to_router(Message, #state{socket = S, enc = Enc, out_max = MaxLength} = State) ->
-    SerMessage = wamper_protocol:serialize(Message, Enc),
-    case byte_size(SerMessage) > MaxLength of
-        true ->
-            ok;
-        false ->
-            ok = gen_tcp:send(S, SerMessage)
+    Family = case application:get_env(awre, ip_version, 4) of
+        6 -> inet6;
+        _ -> inet %% 4 or invalid value
     end,
+
+    %% Create safe args for logging (exclude auth_details)
+    SafeArgs = maps:without([auth_details], Args),
+    ?LOG_DEBUG(#{
+        text => "Starting TCP transport",
+        host => Host,
+        port => Port,
+        family => Family,
+        realm => Realm,
+        encoding => Encoding,
+        use_tls => maps:get(tls, Args, false),
+        safe_args => SafeArgs
+    }),
+
+    %% Determine transport type and connect
+    UseTls = maps:get(tls, Args, false),
+    {Transport, ConnOptions} = case UseTls of
+        true ->
+            %% TLS connection
+            SslOpts = ?CONNECT_OPTIONS(Family) ++ [{verify, verify_none}],
+            {ssl, SslOpts};
+        false ->
+            %% TCP connection
+            {gen_tcp, ?CONNECT_OPTIONS(Family)}
+    end,
+
+    ?LOG_INFO(#{
+        text => "Attempting to connect",
+        transport => Transport,
+        host => Host,
+        port => Port,
+        options => ConnOptions
+    }),
+    case Transport:connect(Host, Port, ConnOptions, ?CONNECT_TIMEOUT) of
+        {ok, Socket} ->
+            ?LOG_INFO(#{
+                text => "Connection established",
+                transport => Transport,
+                socket => Socket
+            }),
+            %% Only link for gen_tcp sockets, not SSL sockets
+            case Transport of
+                gen_tcp -> link(Socket);
+                ssl -> ok  %% SSL sockets don't need linking
+            end,
+            % need to send the handshake packet
+            {Enc, SerNum} = get_encoding_details(Encoding),
+            MaxLen = 15,
+            HandshakePacket = build_handshake_packet(MaxLen, SerNum),
+            ok = transport_send(Transport, Socket, HandshakePacket),
+            State = #state{
+                awre_con = Con,
+                version = Version,
+                client_details = CDetails,
+                socket = Socket,
+                transport = Transport,
+                enc = Enc,
+                sernum = SerNum,
+                realm = Realm,
+                %% in case of authentication configuration is provided
+                auth_details = wamp_client_sensitive:wrap(maps:get(auth_details, Args, undefined))
+            },
+            {ok, State};
+        {error, Reason} ->
+            ?LOG_ERROR(#{
+                text => "Connection failed",
+                host => Host,
+                port => Port,
+                transport => Transport,
+                options => ConnOptions,
+                reason => Reason
+            }),
+            {error, Reason}
+    end.
+
+
+%% ----------------------------------------------------------------------------
+%% @doc Sends a message to the router
+%% @end
+%% ----------------------------------------------------------------------------
+-spec send_to_router(term(), #state{}) -> {ok, #state{}} | {error, term()}.
+
+send_to_router({ping, Payload}, #state{socket = S, transport = T} = State) ->
+    ok = send_ping_pong(ping, Payload, fun(Frame) -> transport_send(T, S, Frame) end),
+    {ok, State};
+
+send_to_router({pong, Payload}, #state{socket = S, transport = T} = State) ->
+    ok = send_ping_pong(pong, Payload, fun(Frame) -> transport_send(T, S, Frame) end),
+    {ok, State};
+
+%% Authenticates using password
+send_to_router({challenge, password} = Challenge, State) ->
+    Message = send_challenge_response(Challenge, State),
+    send_to_router(Message, State);
+
+%% Authenticates using WAMP-CRA
+send_to_router({challenge, wampcra, _AuthExtra} = Challenge, State) ->
+    Message = send_challenge_response(Challenge, State),
+    send_to_router(Message, State);
+
+%% Authenticates using cryptosign
+send_to_router({challenge, cryptosign, _AuthExtra} = Challenge, State) ->
+    Message = send_challenge_response(Challenge, State),
+    send_to_router(Message, State);
+
+send_to_router(Message, #state{socket = S, transport = T, enc = Enc, out_max = MaxLength} = State) ->
+    ok = send_wamp_message(Message, Enc, MaxLength, fun(SerMsg) -> transport_send(T, S, SerMsg) end),
     {ok, State}.
 
+
+%% ----------------------------------------------------------------------------
+%% @doc Handles incoming messages from the transport (TCP and TLS)
+%% @end
+%% ----------------------------------------------------------------------------
 handle_info(
-    {tcp, Socket, Data},
-    #state{buffer = Buffer, socket = Socket, enc = Enc, handshake = done} = State
-) ->
+    {MsgType, Socket, Data},
+    #state{buffer = Buffer, socket = Socket, transport = _Transport, enc = Enc, handshake = done} = State
+) when (MsgType =:= tcp orelse MsgType =:= ssl) ->
     {Messages, NewBuffer} = wamper_protocol:deserialize(<<Buffer/binary, Data/binary>>, Enc),
     forward_messages(Messages, State),
     {ok, State#state{buffer = NewBuffer}};
-handle_info({tcp, Socket, <<127, 0, 0, 0>>}, #state{socket = Socket} = State) ->
-    forward_messages([{abort, #{}, tcp_handshake_failed}], State),
+
+%% Handle handshake failure
+handle_info({MsgType, Socket, <<127, 0, 0, 0>>}, #state{socket = Socket, transport = _Transport} = State)
+when (MsgType =:= tcp orelse MsgType =:= ssl) ->
+    forward_messages([{abort, #{}, handshake_failed}], State),
     {ok, State};
+
+%% Handle handshake response
 handle_info(
-    {tcp, Socket, <<127, L:4, S:4, 0, 0>>},
-    #state{
-        socket = Socket,
-        realm = Realm,
-        sernum = SerNum,
-        version = Version,
-        client_details = CDetails,
-        auth_details = AuthDetails
-    } = State
-) ->
-    S = SerNum,
-    case AuthDetails of
-        undefined ->
-            %% anonymous authentication
-            State1 = State#state{out_max = math:pow(2, 9 + L), handshake = done},
-            send_to_router({hello, Realm, #{agent => Version, roles => CDetails}}, State1);
-        #{method := anonymous} ->
-            %% anonymous authentication
-            State1 = State#state{out_max = math:pow(2, 9 + L), handshake = done},
-            send_to_router({hello, Realm, #{agent => Version, roles => CDetails}}, State1);
-        #{user := AuthId, method := cryptosign, pubkey := PubKey} ->
-            %% cryptosign authentication
-            State1 = State#state{out_max = math:pow(2, 9 + L), handshake = done},
-            send_to_router(
-                {hello, Realm, #{
-                    agent => Version,
-                    roles => CDetails,
-                    authid => AuthId,
-                    authmethods => [cryptosign],
-                    authextra => #{pubkey => PubKey}
-                }},
-                State1
-            );
-        #{user := AuthId, method := AuthMethod} ->
-            %% password authentication
-            %% wampcra authentication
-            State1 = State#state{out_max = math:pow(2, 9 + L), handshake = done},
-            send_to_router(
-                {hello, Realm, #{
-                    agent => Version,
-                    roles => CDetails,
-                    authid => AuthId,
-                    authmethods => [AuthMethod]
-                }},
-                State1
-            )
-    end;
-handle_info({tcp_closed, Socket}, State) ->
+    {MsgType, Socket, HandshakeData},
+    #state{socket = Socket, transport = _Transport} = State
+) when (MsgType =:= tcp orelse MsgType =:= ssl) andalso byte_size(HandshakeData) =:= 4 ->
     ?LOG_INFO(#{
-        text => "Connection closed",
+        text => "Received handshake response",
+        transport => MsgType,
+        data => HandshakeData,
+        size => byte_size(HandshakeData)
+    }),
+    case handle_handshake_response(HandshakeData, State) of
+        {ok, NewState} ->
+            forward_messages([{abort, #{}, handshake_failed}], NewState),
+            {ok, NewState};
+        {{hello, {Realm, HelloDetails}}, NewState} ->
+            send_to_router({hello, Realm, HelloDetails}, NewState)
+    end;
+
+%% Handle connection closed (TCP)
+handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
+    ?LOG_INFO(#{
+        text => "TCP connection closed",
         reason => tcp_closed,
         socket => Socket
     }),
     {stop, tcp_closed, State};
-handle_info({tcp_error, Socket, Reason}, State) ->
+
+%% Handle connection closed (TLS)
+handle_info({ssl_closed, Socket}, #state{socket = Socket} = State) ->
     ?LOG_INFO(#{
-        text => "Connection closed",
+        text => "TLS connection closed",
+        reason => ssl_closed,
+        socket => Socket
+    }),
+    {stop, ssl_closed, State};
+
+%% Handle connection error (TCP)
+handle_info({tcp_error, Socket, Reason}, #state{socket = Socket} = State) ->
+    ?LOG_INFO(#{
+        text => "TCP connection error",
+        socket => Socket,
+        reason => Reason
+    }),
+    {stop, Reason, State};
+
+%% Handle connection error (TLS)
+handle_info({ssl_error, Socket, Reason}, #state{socket = Socket} = State) ->
+    ?LOG_INFO(#{
+        text => "TLS connection error",
         socket => Socket,
         reason => Reason
     }),
@@ -232,22 +272,212 @@ handle_info(Info, State) ->
     }),
     {noreply, State}.
 
-shutdown(#state{socket = S}) ->
-    ok = gen_tcp:close(S),
+
+%% ----------------------------------------------------------------------------
+%% @doc Shuts down the transport and closes the socket
+%% @end
+%% ----------------------------------------------------------------------------
+-spec shutdown(#state{}) -> ok.
+
+shutdown(#state{socket = S, transport = T}) ->
+    ok = transport_close(T, S),
     ok.
+
+
+
+%% =============================================================================
+%% ENCODING AND MESSAGE HANDLING
+%% =============================================================================
+
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Forwards messages to the awre connection process
+%% @end
+%% ----------------------------------------------------------------------------
+-spec forward_messages([term()], #state{}) -> ok.
 
 forward_messages([], _) ->
     ok;
+
 forward_messages([{ping, Payload} | Tail], State0) ->
     {ok, State1} = send_to_router({pong, Payload}, State0),
     forward_messages(Tail, State1);
+
 forward_messages([Msg | Tail], #state{awre_con = Con} = State) ->
     awre_con:send_to_client(Msg, Con),
     forward_messages(Tail, State).
 
-%% =============================================================================
-%% PRIVATE
-%% =============================================================================
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Gets encoding details (enc atom and serialization number) from encoding parameter
+%% @end
+%% ----------------------------------------------------------------------------
+-spec get_encoding_details(atom()) -> {atom(), integer()}.
+
+get_encoding_details(Encoding) ->
+    Enc = case Encoding of
+        json -> raw_json;
+        raw_json -> raw_json;
+        msgpack -> raw_msgpack;
+        raw_msgpack -> raw_msgpack;
+        erlbin -> raw_erlbin;
+        raw_erlbin -> raw_erlbin;
+        _ -> raw_msgpack
+    end,
+    SerNum = case Enc of
+        raw_json ->
+            1;
+        raw_msgpack ->
+            2;
+        raw_erlbin ->
+            EBinNumber = application:get_env(wamp_client, erlbin_number, undefined),
+            case {is_integer(EBinNumber), EBinNumber > 0} of
+                {true, true} -> EBinNumber;
+                _ -> error("application parameter erlbin_number not set")
+            end;
+        _ ->
+            0
+    end,
+    {Enc, SerNum}.
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Builds the initial handshake packet
+%% @end
+%% ----------------------------------------------------------------------------
+-spec build_handshake_packet(integer(), integer()) -> binary().
+
+build_handshake_packet(MaxLen, SerNum) ->
+    <<127, MaxLen:4, SerNum:4, 0, 0>>.
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Sends ping/pong frames
+%% @end
+%% ----------------------------------------------------------------------------
+-spec send_ping_pong(ping | pong, binary(), function()) -> ok.
+
+send_ping_pong(ping, Payload, SendFun) ->
+    Frame = <<1:8, (byte_size(Payload)):24, Payload/binary>>,  % RAW_PING_PREFIX = 1
+    SendFun(Frame);
+
+send_ping_pong(pong, Payload, SendFun) ->
+    Frame = <<2:8, (byte_size(Payload)):24, Payload/binary>>,  % RAW_PONG_PREFIX = 2
+    SendFun(Frame).
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Handles challenge response messages
+%% @end
+%% ----------------------------------------------------------------------------
+-spec send_challenge_response({challenge, atom()} | {challenge, atom(), map()}, #state{}) ->
+    {authenticate, binary(), map()}.
+
+send_challenge_response({challenge, password}, State) ->
+    AuthDetails = wamp_client_sensitive:unwrap(State#state.auth_details),
+    Password = maps:get(secret, AuthDetails, <<>>),
+    Signature = handle_challenge(password, Password),
+    {authenticate, Signature, #{}};
+
+send_challenge_response({challenge, wampcra, AuthExtra}, State) ->
+    AuthDetails = wamp_client_sensitive:unwrap(State#state.auth_details),
+    Password = maps:get(secret, AuthDetails, <<>>),
+    Signature = handle_challenge(wampcra, Password, AuthExtra),
+    {authenticate, Signature, #{}};
+
+send_challenge_response({challenge, cryptosign, AuthExtra}, State) ->
+    AuthDetails = wamp_client_sensitive:unwrap(State#state.auth_details),
+    PubKey = maps:get(pubkey, AuthDetails, <<>>),
+    PrivKey = maps:get(privkey, AuthDetails, <<>>),
+    Signature = handle_challenge(cryptosign, {PubKey, PrivKey}, AuthExtra),
+    {authenticate, Signature, #{}}.
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Sends WAMP messages with size check
+%% @end
+%% ----------------------------------------------------------------------------
+-spec send_wamp_message(term(), atom(), integer(), function()) -> ok.
+
+send_wamp_message(Message, Enc, MaxLength, SendFun) ->
+    SerMessage = wamper_protocol:serialize(Message, Enc),
+    case byte_size(SerMessage) > MaxLength of
+        true ->
+            ok;
+        false ->
+            SendFun(SerMessage)
+    end.
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Handles handshake response and builds hello message
+%% @end
+%% ----------------------------------------------------------------------------
+-spec handle_handshake_response(binary(), #state{}) ->
+    {ok, #state{}} | {{hello, {binary(), map()}}, #state{}}.
+
+handle_handshake_response(<<127, 0, 0, 0>>, State) ->
+    {ok, State};
+
+handle_handshake_response(
+    <<127, L:4, S:4, 0, 0>>,
+    #state{
+        realm = Realm,
+        sernum = SerNum,
+        version = Version,
+        client_details = CDetails,
+        auth_details = AuthDetails0
+    } = State
+) when S =:= SerNum ->
+    NewState = State#state{out_max = math:pow(2, 9 + L), handshake = done},
+    AuthDetails = wamp_client_sensitive:unwrap(AuthDetails0),
+    {Realm2, HelloDetails} = build_hello_message(Realm, Version, CDetails, AuthDetails),
+    {{hello, {Realm2, HelloDetails}}, NewState}.
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Builds hello message based on authentication details
+%% @end
+%% ----------------------------------------------------------------------------
+-spec build_hello_message(binary(), binary(), map(), undefined | map()) ->
+    {binary(), map()}.
+
+build_hello_message(Realm, Version, CDetails, undefined) ->
+    %% anonymous authentication
+    {Realm, #{agent => Version, roles => CDetails}};
+
+build_hello_message(Realm, Version, CDetails, #{method := anonymous}) ->
+    %% anonymous authentication
+    {Realm, #{agent => Version, roles => CDetails}};
+
+build_hello_message(Realm, Version, CDetails, #{user := AuthId, method := cryptosign, pubkey := PubKey}) ->
+    %% cryptosign authentication
+    {Realm, #{
+        agent => Version,
+        roles => CDetails,
+        authid => AuthId,
+        authmethods => [cryptosign],
+        authextra => #{pubkey => PubKey}
+    }};
+
+build_hello_message(Realm, Version, CDetails, #{user := AuthId, method := AuthMethod}) ->
+    %% password authentication or wampcra authentication
+    {Realm, #{
+        agent => Version,
+        roles => CDetails,
+        authid => AuthId,
+        authmethods => [AuthMethod]
+    }}.
+
 
 %% ----------------------------------------------------------------------------
 %% @private
@@ -258,6 +488,7 @@ forward_messages([Msg | Tail], #state{awre_con = Con} = State) ->
 
 handle_challenge(password, Password) ->
     handle_challenge(password, Password, undefined).
+
 
 %% ----------------------------------------------------------------------------
 %% @private
@@ -270,12 +501,6 @@ handle_challenge(password, Password, _) ->
     Password;
 
 %% Authenticates using WAMP-CRA
-%% AuthExtra = #{
-%%  challenge
-%%  iterations
-%%  keylen
-%%  salt
-%% }
 handle_challenge(wampcra, Password, AuthExtra) ->
     %% Extract challenge parameters
     #{
@@ -294,10 +519,6 @@ handle_challenge(wampcra, Password, AuthExtra) ->
     base64:encode(Signature);
 
 %% Authenticates using cryptosign
-%% AuthExtra = #{
-%%  challenge
-%%  <<"channel_binding">>
-%% }
 handle_challenge(cryptosign, {PubKey, PrivKey}, AuthExtra) ->
     HexMessage = maps:get(challenge, AuthExtra, <<>>),
 
@@ -327,7 +548,7 @@ sign(Challenge, HexPubKey, HexPrivKey) ->
 
 %% -----------------------------------------------------------------------------
 %% @private
-%% Normalizes an Ed25519 private key to ensure it is in the 32-byte format required 
+%% Normalizes an Ed25519 private key to ensure it is in the 32-byte format required
 %% for signing operations. This function accepts either a 32-byte or 64-byte binary key.
 %% If a 64-byte key is provided, it assumes the key consists of a 32-byte private key
 %% followed by a 32-byte public key, and returns only the first 32 bytes (the private key).
@@ -342,3 +563,33 @@ normalise_privkey(Key) when byte_size(Key) == 64 ->
 
 normalise_privkey(Key) ->
     Key.
+
+
+
+%% =============================================================================
+%% TRANSPORT ABSTRACTION
+%% =============================================================================
+
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Sends data using the appropriate transport
+%% @end
+%% ----------------------------------------------------------------------------
+-spec transport_send(gen_tcp | ssl, term(), binary()) -> ok.
+
+transport_send(Transport, Socket, Data) ->
+    Transport:send(Socket, Data).
+
+
+%% ----------------------------------------------------------------------------
+%% @private
+%% @doc Closes socket using the appropriate transport
+%% @end
+%% ----------------------------------------------------------------------------
+-spec transport_close(gen_tcp | ssl, term()) -> ok.
+
+transport_close(Transport, Socket) ->
+    Transport:close(Socket).
+
