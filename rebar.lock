@@ -34,7 +34,7 @@
   1},
  {<<"wamp">>,
   {git,"https://github.com/Leapsight/wamp.git",
-       {ref,"a96740544e986f5ec4b3887e3b6a00293f81886f"}},
+       {ref,"6c649b02b1c425d2ee45d7c3f521fc5849046893"}},
   0}]}.
 [
 {pkg_hash,[
