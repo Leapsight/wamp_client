@@ -26,7 +26,7 @@
 
 
 -callback init(Args :: map()) -> {ok, State :: any()}.
--callback send_to_router(Message :: term(), State :: any()) -> {ok, NewState :: any()}.
+-callback send_to_router(Message :: term(), State :: any()) -> {ok, NewState :: any()} | {error, Reason :: term()}.
 -callback handle_info(Data :: any(), State :: any()) -> {ok, NewState :: any()}.
 -callback shutdown(State :: any()) -> ok.
 

@@ -44,14 +44,27 @@ end_per_group(_, _Config) ->
     ok.
 
 init_per_suite(Config) ->
+    %% Stop applications in case they're already running
+    application:stop(wamp_client),
+    application:stop(wamp),
+    application:stop(gproc),
+    timer:sleep(100),
+    
+    %% Start applications fresh
     {ok, _} = application:ensure_all_started(gproc),
     {ok, _} = application:ensure_all_started(wamp),
-    {ok, _} = application:ensure_all_started(wamp_client),
-    timer:sleep(2000),
-    Config.
+    case application:ensure_all_started(wamp_client) of
+        {ok, _} -> 
+            timer:sleep(2000),
+            Config;
+        {error, Reason} ->
+            ct:fail("Failed to start wamp_client: ~p", [Reason])
+    end.
 
 end_per_suite(_Config) ->
     application:stop(wamp_client),
+    application:stop(wamp),
+    application:stop(gproc),
     ok.
 
 echo_test(_) ->

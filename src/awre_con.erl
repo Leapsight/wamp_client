@@ -230,45 +230,68 @@ handle_message_from_client(
     {_, NewState} = create_ref_for_message(Msg, From, #{}, State),
     {noreply, NewState#state{transport = {Trans, TState}}, ?TIMEOUT};
 handle_message_from_client({subscribe, Options, Topic, Mfa}, From, State) ->
-    {ok, NewState} = send_and_ref(
-        {subscribe, request_id, Options, Topic}, From, #{mfa => Mfa}, State
-    ),
-    {noreply, NewState, ?TIMEOUT};
+    case send_and_ref({subscribe, request_id, Options, Topic}, From, #{mfa => Mfa}, State) of
+        {ok, NewState} ->
+            {noreply, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            gen_server:reply(From, {error, Reason}),
+            {noreply, State, ?TIMEOUT}
+    end;
 handle_message_from_client({unsubscribe, SubscriptionId}, From, State) ->
-    {ok, NewState} = send_and_ref(
-        {unsubscribe, request_id, SubscriptionId}, From, #{sub_id => SubscriptionId}, State
-    ),
-    {noreply, NewState, ?TIMEOUT};
+    case send_and_ref({unsubscribe, request_id, SubscriptionId}, From, #{sub_id => SubscriptionId}, State) of
+        {ok, NewState} ->
+            {noreply, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            gen_server:reply(From, {error, Reason}),
+            {noreply, State, ?TIMEOUT}
+    end;
 handle_message_from_client({publish, Options, Topic, Arguments, ArgumentsKw}, From, State) ->
-    {ok, NewState} = send_and_ref(
-        {publish, request_id, Options, Topic, Arguments, ArgumentsKw}, From, #{}, State
-    ),
-    {reply, ok, NewState};
+    case send_and_ref({publish, request_id, Options, Topic, Arguments, ArgumentsKw}, From, #{}, State) of
+        {ok, NewState} ->
+            {reply, ok, NewState};
+        {error, Reason} ->
+            {reply, {error, Reason}, State}
+    end;
 handle_message_from_client({register, Options, Procedure, Mfa}, From, State) ->
-    {ok, NewState} = send_and_ref(
-        {register, request_id, Options, Procedure}, From, #{mfa => Mfa}, State
-    ),
-    {noreply, NewState, ?TIMEOUT};
+    case send_and_ref({register, request_id, Options, Procedure}, From, #{mfa => Mfa}, State) of
+        {ok, NewState} ->
+            {noreply, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            gen_server:reply(From, {error, Reason}),
+            {noreply, State, ?TIMEOUT}
+    end;
 handle_message_from_client({unregister, RegistrationId}, From, State) ->
-    {ok, NewState} = send_and_ref(
-        {unregister, request_id, RegistrationId}, From, #{reg_id => RegistrationId}, State
-    ),
-    {noreply, NewState, ?TIMEOUT};
+    case send_and_ref({unregister, request_id, RegistrationId}, From, #{reg_id => RegistrationId}, State) of
+        {ok, NewState} ->
+            {noreply, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            gen_server:reply(From, {error, Reason}),
+            {noreply, State, ?TIMEOUT}
+    end;
 handle_message_from_client({call, Options, Procedure, Arguments, ArgumentsKw}, From, State) ->
-    {ok, NewState} = send_and_ref(
-        {call, request_id, Options, Procedure, Arguments, ArgumentsKw}, From, #{}, State
-    ),
-    {noreply, NewState, ?TIMEOUT};
+    case send_and_ref({call, request_id, Options, Procedure, Arguments, ArgumentsKw}, From, #{}, State) of
+        {ok, NewState} ->
+            {noreply, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            gen_server:reply(From, {error, Reason}),
+            {noreply, State, ?TIMEOUT}
+    end;
 handle_message_from_client({yield, _, _, _, _} = Msg, _From, State) ->
-    {ok, NewState} = send_to_router(Msg, State),
-    {reply, ok, NewState, ?TIMEOUT};
+    case send_to_router(Msg, State) of
+        {ok, NewState} ->
+            {reply, ok, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            {reply, {error, Reason}, State, ?TIMEOUT}
+    end;
 handle_message_from_client(
     {error, invocation, RequestId, Details, ErrorUri, Args, ArgsKw}, _From, State
 ) ->
-    {ok, NewState} = send_to_router(
-        {error, invocation, RequestId, Details, ErrorUri, Args, ArgsKw}, State
-    ),
-    {reply, ok, NewState, ?TIMEOUT};
+    case send_to_router({error, invocation, RequestId, Details, ErrorUri, Args, ArgsKw}, State) of
+        {ok, NewState} ->
+            {reply, ok, NewState, ?TIMEOUT};
+        {error, Reason} ->
+            {reply, {error, Reason}, State, ?TIMEOUT}
+    end;
 handle_message_from_client(_Msg, _From, State) ->
     {noreply, State, ?TIMEOUT}.
 
@@ -520,11 +543,20 @@ handle_message_from_router(Msg, State) ->
 
 send_and_ref(Msg, From, Args, State) ->
     {Message, NewState} = create_ref_for_message(Msg, From, Args, State),
-    send_to_router(Message, NewState).
+    case send_to_router(Message, NewState) of
+        {ok, FinalState} ->
+            {ok, FinalState};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 send_to_router(Msg, #state{transport = {TMod, TState}} = State) ->
-    {ok, NewTState} = TMod:send_to_router(Msg, TState),
-    {ok, State#state{transport = {TMod, NewTState}}}.
+    case TMod:send_to_router(Msg, TState) of
+        {ok, NewTState} ->
+            {ok, State#state{transport = {TMod, NewTState}}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 create_ref_for_message(Msg, From, Args, #state{ets = Ets} = State) ->
     Method =

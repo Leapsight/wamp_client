@@ -33,6 +33,9 @@
 -export([send_to_router/2]).
 -export([shutdown/1]).
 
+%% For testing
+-export([send_wamp_message/4]).
+
 -record(state, {
     awre_con = unknown,
     socket = none,
@@ -189,8 +192,12 @@ send_to_router({challenge, cryptosign, _AuthExtra} = Challenge, State) ->
     send_to_router(Message, State);
 
 send_to_router(Message, #state{socket = S, transport = T, enc = Enc, out_max = MaxLength} = State) ->
-    ok = send_wamp_message(Message, Enc, MaxLength, fun(SerMsg) -> transport_send(T, S, SerMsg) end),
-    {ok, State}.
+    case send_wamp_message(Message, Enc, MaxLength, fun(SerMsg) -> transport_send(T, S, SerMsg) end) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 
 %% ----------------------------------------------------------------------------
@@ -404,13 +411,21 @@ send_challenge_response({challenge, cryptosign, AuthExtra}, State) ->
 %% @doc Sends WAMP messages with size check
 %% @end
 %% ----------------------------------------------------------------------------
--spec send_wamp_message(term(), atom(), integer(), function()) -> ok.
+-spec send_wamp_message(term(), atom(), integer(), function()) -> ok | {error, term()}.
 
 send_wamp_message(Message, Enc, MaxLength, SendFun) ->
     SerMessage = wamper_protocol:serialize(Message, Enc),
-    case byte_size(SerMessage) > MaxLength of
+    MsgSize = byte_size(SerMessage),
+    case MsgSize > MaxLength of
         true ->
-            ok;
+            ?LOG_ERROR(#{
+                text => "WAMP message exceeds maximum size limit",
+                message_size => MsgSize,
+                max_size => MaxLength,
+                encoding => Enc,
+                message_type => element(1, Message)
+            }),
+            {error, {message_too_large, MsgSize, MaxLength}};
         false ->
             SendFun(SerMessage)
     end.
