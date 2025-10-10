@@ -660,23 +660,54 @@ handle_invocation({invocation, ReqId, RegId, Details, Args, KWArgs}, State) ->
 
 %% @private
 internal_error_uri() ->
-    Key = {?MODULE, internal_error_uri},
+    get_error_uri(internal_error).
+
+%% @private
+get_error_uri(ErrorType) ->
+    Key = {?MODULE, error_uri, ErrorType},
     case persistent_term:get(Key, undefined) of
         undefined ->
             ErrorUris = application:get_env(wamp_client, error_uris, #{}),
-            InternalErrorUri = key_value:get(internal_error, ErrorUris, <<"com.myservice.error.internal">>),
-            _ = persistent_term:put(Key, InternalErrorUri),
-            InternalErrorUri;
-        InternalErrorUri ->
-            InternalErrorUri
+            DefaultUri = get_default_error_uri(ErrorType),
+            ErrorUri = key_value:get(ErrorType, ErrorUris, DefaultUri),
+            _ = persistent_term:put(Key, ErrorUri),
+            ErrorUri;
+        ErrorUri ->
+            ErrorUri
     end.
+
+%% @private
+get_default_error_uri(internal_error) -> <<"com.myservice.error.internal">>;
+get_default_error_uri(message_too_large) -> <<"com.myservice.error.message_too_large">>;
+get_default_error_uri(invalid_argument) -> <<"com.myservice.error.invalid_argument">>;
+get_default_error_uri(_) -> <<"com.myservice.error.unexpected">>.
 
 
 %% @private
 reply_yield(Conn, ReqId, Details, Args, KWArgs, Fun, PeerName)
 when is_list(Args), is_map(KWArgs), is_map(Details) ->
-    ok = awre:yield(Conn, ReqId, Details, Args, KWArgs),
-    ok = maybe_apply_fun(Fun, PeerName).
+    case awre:yield(Conn, ReqId, Details, Args, KWArgs) of
+        ok ->
+            ok = maybe_apply_fun(Fun, PeerName);
+        {error, {message_too_large, Size, Limit}} ->
+            ErrorUri = get_error_uri(message_too_large),
+            awre:error(Conn, ReqId, #{}, ErrorUri, 
+                      [<<"Message too large">>, Size, Limit],
+                      #{size => Size, limit => Limit}),
+            ok = maybe_apply_fun(Fun, PeerName);
+        {error, Reason} ->
+            ErrorUri = get_error_uri(internal_error),
+            ReasonBinary = case Reason of
+                Atom when is_atom(Atom) -> atom_to_binary(Atom, utf8);
+                Binary when is_binary(Binary) -> Binary;
+                List when is_list(List) -> list_to_binary(List);
+                _ -> <<"Unknown error">>
+            end,
+            awre:error(Conn, ReqId, #{}, ErrorUri, 
+                      [<<"Internal error">>, ReasonBinary],
+                      #{}),
+            ok = maybe_apply_fun(Fun, PeerName)
+    end.
 
 
 %% @private
