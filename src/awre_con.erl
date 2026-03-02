@@ -325,8 +325,12 @@ handle_message_from_router({challenge, <<"cryptosign">>, AuthExtra}, State) ->
     {ok, NewState} = send_to_router({challenge, cryptosign, AuthExtra}, State),
     {noreply, NewState, ?TIMEOUT};
 handle_message_from_router({welcome, SessionId, RouterDetails}, State) ->
-    {From, _} = get_ref(hello, hello, State),
-    gen_server:reply(From, {ok, SessionId, RouterDetails}),
+    case safe_get_ref(hello, hello, State) of
+        {ok, From, _} ->
+            gen_server:reply(From, {ok, SessionId, RouterDetails});
+        {error, not_found} ->
+            ?LOG_WARNING(#{text => "Received WELCOME without pending hello"})
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({abort, Details, Reason}, State) ->
     ?LOG_WARNING(#{
@@ -336,8 +340,12 @@ handle_message_from_router({abort, Details, Reason}, State) ->
             reason => Reason
         }
     }),
-    {From, _} = get_ref(hello, hello, State),
-    gen_server:reply(From, {abort, Details, Reason}),
+    case safe_get_ref(hello, hello, State) of
+        {ok, From, _} ->
+            gen_server:reply(From, {abort, Details, Reason});
+        {error, not_found} ->
+            ?LOG_WARNING(#{text => "Received ABORT without pending hello", reason => Reason})
+    end,
     close_connection(),
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({goodbye, _Details, _Reason}, #state{goodbye_sent = GS} = State) ->
@@ -356,17 +364,31 @@ handle_message_from_router({goodbye, _Details, _Reason}, #state{goodbye_sent = G
 %handle_message_from_router({published,},#state{ets=Ets}) ->
 
 handle_message_from_router({subscribed, RequestId, SubscriptionId}, #state{ets = Ets} = State) ->
-    {From, Args} = get_ref(RequestId, subscribe, State),
-    Mfa = maps:get(mfa, Args),
-    {Pid, _} = From,
-    ets:insert_new(Ets, #subscription{id = SubscriptionId, mfa = Mfa, pid = Pid}),
-    gen_server:reply(From, {ok, SubscriptionId}),
+    case safe_get_ref(RequestId, subscribe, State) of
+        {ok, From, Args} ->
+            Mfa = maps:get(mfa, Args),
+            {Pid, _} = From,
+            ets:insert_new(Ets, #subscription{id = SubscriptionId, mfa = Mfa, pid = Pid}),
+            gen_server:reply(From, {ok, SubscriptionId});
+        {error, not_found} ->
+            ?LOG_WARNING(#{
+                text => "Received SUBSCRIBED for unknown request",
+                request_id => RequestId
+            })
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({unsubscribed, RequestId}, #state{ets = Ets} = State) ->
-    {From, Args} = get_ref(RequestId, unsubscribe, State),
-    SubscriptionId = maps:get(sub_id, Args),
-    ets:delete(Ets, SubscriptionId),
-    gen_server:reply(From, ok),
+    case safe_get_ref(RequestId, unsubscribe, State) of
+        {ok, From, Args} ->
+            SubscriptionId = maps:get(sub_id, Args),
+            ets:delete(Ets, SubscriptionId),
+            gen_server:reply(From, ok);
+        {error, not_found} ->
+            ?LOG_WARNING(#{
+                text => "Received UNSUBSCRIBED for unknown request",
+                request_id => RequestId
+            })
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({event, SubscriptionId, PublicationId, Details}, State) ->
     handle_message_from_router(
@@ -380,29 +402,30 @@ handle_message_from_router(
     {event, SubscriptionId, _PublicationId, Details, Arguments, ArgumentsKw} = Msg,
     #state{ets = Ets} = State
 ) ->
-    [
-        #subscription{
-            id = SubscriptionId,
-            mfa = Mfa,
-            pid = Pid
-        }
-    ] = ets:lookup(Ets, SubscriptionId),
-    case Mfa of
-        undefined ->
-            % send it to user process
-            Pid ! {awre, Msg};
-        {M, F, S} ->
-            try
-                erlang:apply(M, F, [Details, Arguments, ArgumentsKw, S])
-            catch
-                Error:Reason:Stacktrace ->
-                    ?LOG_ERROR(#{
-                        message => "Error applying event message from router",
-                        error => Error,
-                        reason => Reason,
-                        stacktrace => Stacktrace
-                    })
-            end
+    case ets:lookup(Ets, SubscriptionId) of
+        [#subscription{mfa = Mfa, pid = Pid}] ->
+            case Mfa of
+                undefined ->
+                    % send it to user process
+                    Pid ! {awre, Msg};
+                {M, F, S} ->
+                    try
+                        erlang:apply(M, F, [Details, Arguments, ArgumentsKw, S])
+                    catch
+                        Error:Reason:Stacktrace ->
+                            ?LOG_ERROR(#{
+                                message => "Error applying event message from router",
+                                error => Error,
+                                reason => Reason,
+                                stacktrace => Stacktrace
+                            })
+                    end
+            end;
+        [] ->
+            ?LOG_WARNING(#{
+                text => "Received EVENT for unknown subscription",
+                subscription_id => SubscriptionId
+            })
     end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({result, RequestId, Details}, State) ->
@@ -410,21 +433,42 @@ handle_message_from_router({result, RequestId, Details}, State) ->
 handle_message_from_router({result, RequestId, Details, Arguments}, State) ->
     handle_message_from_router({result, RequestId, Details, Arguments, undefined}, State);
 handle_message_from_router({result, RequestId, Details, Arguments, ArgumentsKw}, State) ->
-    {From, _} = get_ref(RequestId, call, State),
-    gen_server:reply(From, {ok, Details, Arguments, ArgumentsKw}),
+    case safe_get_ref(RequestId, call, State) of
+        {ok, From, _} ->
+            gen_server:reply(From, {ok, Details, Arguments, ArgumentsKw});
+        {error, not_found} ->
+            ?LOG_WARNING(#{
+                text => "Received RESULT for unknown call request",
+                request_id => RequestId
+            })
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({registered, RequestId, RegistrationId}, #state{ets = Ets} = State) ->
-    {From, Args} = get_ref(RequestId, register, State),
-    Mfa = maps:get(mfa, Args),
-    {Pid, _} = From,
-    ets:insert_new(Ets, #registration{id = RegistrationId, mfa = Mfa, pid = Pid}),
-    gen_server:reply(From, {ok, RegistrationId}),
+    case safe_get_ref(RequestId, register, State) of
+        {ok, From, Args} ->
+            Mfa = maps:get(mfa, Args),
+            {Pid, _} = From,
+            ets:insert_new(Ets, #registration{id = RegistrationId, mfa = Mfa, pid = Pid}),
+            gen_server:reply(From, {ok, RegistrationId});
+        {error, not_found} ->
+            ?LOG_WARNING(#{
+                text => "Received REGISTERED for unknown request",
+                request_id => RequestId
+            })
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({unregistered, RequestId}, #state{ets = Ets} = State) ->
-    {From, Args} = get_ref(RequestId, unregister, State),
-    RegistrationId = maps:get(reg_id, Args),
-    ets:delete(Ets, RegistrationId),
-    gen_server:reply(From, ok),
+    case safe_get_ref(RequestId, unregister, State) of
+        {ok, From, Args} ->
+            RegistrationId = maps:get(reg_id, Args),
+            ets:delete(Ets, RegistrationId),
+            gen_server:reply(From, ok);
+        {error, not_found} ->
+            ?LOG_WARNING(#{
+                text => "Received UNREGISTERED for unknown request",
+                request_id => RequestId
+            })
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router({invocation, RequestId, RegistrationId, Details}, State) ->
     handle_message_from_router(
@@ -438,51 +482,59 @@ handle_message_from_router(
     {invocation, RequestId, RegistrationId, Details, Arguments, ArgumentsKw} = Msg,
     #state{ets = Ets} = State
 ) ->
-    [
-        #registration{
-            id = RegistrationId,
-            mfa = Mfa,
-            pid = Pid
-        }
-    ] = ets:lookup(Ets, RegistrationId),
-    NewState =
-        case Mfa of
-            undefined ->
-                % send it to the user process
-                Pid ! {awre, Msg},
-                State;
-            {M, F, S} ->
-                try erlang:apply(M, F, [Details, Arguments, ArgumentsKw, S]) of
-                    {ok, Options, ResA, ResAKw} ->
-                        {ok, NState} = send_to_router(
-                            {yield, RequestId, Options, ResA, ResAKw}, State
-                        ),
-                        NState;
-                    {error, Details, Uri, Arguments, ArgumentsKw} ->
-                        {ok, NState} = send_to_router(
-                            {error, invocation, RequestId, Details, Uri, Arguments, ArgumentsKw},
-                            State
-                        ),
-                        NState;
-                    Other ->
-                        {ok, NState} = send_to_router(
-                            {error, invocation, RequestId, #{<<"result">> => Other},
-                                invalid_argument, undefined, undefined},
-                            State
-                        ),
-                        NState
-                catch
-                    Error:Reason ->
-                        {ok, NState} = send_to_router(
-                            {error, invocation, RequestId,
-                                #{<<"reason">> => io_lib:format("~p:~p", [Error, Reason])},
-                                invalid_argument, undefined, undefined},
-                            State
-                        ),
-                        NState
-                end
-        end,
-    {noreply, NewState, ?TIMEOUT};
+    case ets:lookup(Ets, RegistrationId) of
+        [#registration{mfa = Mfa, pid = Pid}] ->
+            NewState =
+                case Mfa of
+                    undefined ->
+                        % send it to the user process
+                        Pid ! {awre, Msg},
+                        State;
+                    {M, F, S} ->
+                        try erlang:apply(M, F, [Details, Arguments, ArgumentsKw, S]) of
+                            {ok, Options, ResA, ResAKw} ->
+                                {ok, NState} = send_to_router(
+                                    {yield, RequestId, Options, ResA, ResAKw}, State
+                                ),
+                                NState;
+                            {error, Details, Uri, Arguments, ArgumentsKw} ->
+                                {ok, NState} = send_to_router(
+                                    {error, invocation, RequestId, Details, Uri, Arguments, ArgumentsKw},
+                                    State
+                                ),
+                                NState;
+                            Other ->
+                                {ok, NState} = send_to_router(
+                                    {error, invocation, RequestId, #{<<"result">> => Other},
+                                        invalid_argument, undefined, undefined},
+                                    State
+                                ),
+                                NState
+                        catch
+                            Error:Reason ->
+                                {ok, NState} = send_to_router(
+                                    {error, invocation, RequestId,
+                                        #{<<"reason">> => io_lib:format("~p:~p", [Error, Reason])},
+                                        invalid_argument, undefined, undefined},
+                                    State
+                                ),
+                                NState
+                        end
+                end,
+            {noreply, NewState, ?TIMEOUT};
+        [] ->
+            ?LOG_WARNING(#{
+                text => "Received INVOCATION for unknown registration",
+                registration_id => RegistrationId
+            }),
+            {ok, NewState} = send_to_router(
+                {error, invocation, RequestId, #{},
+                    <<"wamp.error.no_such_procedure">>,
+                    undefined, undefined},
+                State
+            ),
+            {noreply, NewState, ?TIMEOUT}
+    end;
 handle_message_from_router({error, Action, RequestId, Details, Error}, State) ->
     handle_message_from_router(
         {error, Action, RequestId, Details, Error, undefined, undefined}, State
@@ -509,8 +561,16 @@ handle_message_from_router({error, Action, RequestId, Details, Error, Arguments,
         args => Arguments,
         kwargs => ArgumentsKw
     }),
-    {From, _} = get_ref(RequestId, Action, State),
-    gen_server:reply(From, {error, Details, Error, Arguments, ArgumentsKw}),
+    case safe_get_ref(RequestId, Action, State) of
+        {ok, From, _} ->
+            gen_server:reply(From, {error, Details, Error, Arguments, ArgumentsKw});
+        {error, not_found} ->
+            ?LOG_WARNING(#{
+                text => "Received ERROR for unknown request",
+                action => Action,
+                request_id => RequestId
+            })
+    end,
     {noreply, State, ?TIMEOUT};
 handle_message_from_router(Msg, State) ->
     ?LOG_ERROR(#{text => "Received unhandled message from router", message => Msg}),
@@ -602,11 +662,15 @@ create_ref_for_message(Msg, From, Args, #state{ets = Ets} = State) ->
             {Msg, NewState}
     end.
 
-get_ref(ReqId, Method, #state{ets = Ets}) ->
+safe_get_ref(ReqId, Method, #state{ets = Ets}) ->
     Key = {Method, ReqId},
-    [#ref{ref = From, args = Args}] = ets:lookup(Ets, Key),
-    ets:delete(Ets, Key),
-    {From, Args}.
+    case ets:lookup(Ets, Key) of
+        [#ref{ref = From, args = Args}] ->
+            ets:delete(Ets, Key),
+            {ok, From, Args};
+        [] ->
+            {error, not_found}
+    end.
 
 close_connection() ->
     gen_server:cast(self(), terminate).
