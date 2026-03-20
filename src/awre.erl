@@ -117,7 +117,7 @@ connect(ConPid, Host, Port, Realm, Encoding) ->
 connect(ConPid, Host, Port, Realm, Encoding, undefined) ->
     connect(ConPid, Host, Port, Realm, Encoding);
 connect(ConPid, Host, Port, Realm, Encoding, AuthDetails) ->
-    gen_server:call(ConPid, {awre_call, {connect, Host, Port, Realm, Encoding, AuthDetails}}).
+    gen_server:call(ConPid, {awre_call, {connect, Host, Port, Realm, Encoding, wamp_client_sensitive:wrap(AuthDetails)}}).
 
 -spec connect(
     ConPid :: pid(),
@@ -129,7 +129,7 @@ connect(ConPid, Host, Port, Realm, Encoding, AuthDetails) ->
     TlsEnabled :: boolean()
 ) -> {ok, SessionId :: non_neg_integer(), RouterDetails :: list()}.
 connect(ConPid, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled) ->
-    gen_server:call(ConPid, {awre_call, {connect, Host, Port, Realm, Encoding, AuthDetails, TlsEnabled}}).
+    gen_server:call(ConPid, {awre_call, {connect, Host, Port, Realm, Encoding, wamp_client_sensitive:wrap(AuthDetails), TlsEnabled}}).
 
 %% @doc Subscribe to an event.
 %% subscribe to the event Topic.

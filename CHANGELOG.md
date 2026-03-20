@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] - 2026-03-19
+
+### Fixed
+- **Sensitive data exposure in crash reports**: Private keys and other auth credentials were visible in OTP crash logs under "Last message" when a connection failed (e.g., DNS resolution error). Root cause: `wamp_client_sensitive:wrap/1` was only applied when storing auth details in `awre_trans_tcp` state, but the raw `AuthDetails` map (including `privkey`) had already entered the `awre_con` gen_server mailbox unprotected.
+  - `awre:connect/6,7` now wraps `AuthDetails` with `wamp_client_sensitive:wrap/1` before sending the gen_server call message, so the mailbox never holds plain-text credentials.
+  - `awre_con:handle_message_from_client` unwraps auth details with `wamp_client_sensitive:unwrap/1` before passing them to `awre_transport:init/1`.
+  - `awre_con:format_status/1` now sanitizes the `message` field in crash reports as a defense-in-depth measure, redacting `privkey`, `password`, `secret`, and `token` keys from any connect message that reaches the crash reporter unwrapped.
+
 ## [2.0.0] - 2025 August
 
 ### Major Changes

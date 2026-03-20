@@ -213,11 +213,11 @@ handle_message_from_client(
         tls => TlsEnabled
     },
     Args =
-        case AuthDetails of
+        case wamp_client_sensitive:unwrap(AuthDetails) of
             undefined ->
                 Args0;
-            AuthDetails ->
-                Args0#{auth_details => AuthDetails}
+            UnwrappedAuth ->
+                Args0#{auth_details => UnwrappedAuth}
         end,
     {Trans, TState} =
         case T of
@@ -718,6 +718,35 @@ stop_timeout(Reason, State) ->
     NewStatus :: #{state => term(), log => [sys:log_entry()]}.
 
 format_status(#{state := State} = Status) ->
-    %% State record doesn't currently contain sensitive data, but we provide
-    %% this callback as a safety measure and for consistency
-    Status#{state => State}.
+    NewStatus = Status#{state => State},
+    case maps:find(message, NewStatus) of
+        {ok, Msg} ->
+            NewStatus#{message => sanitize_message(Msg)};
+        error ->
+            NewStatus
+    end.
+
+%% @private
+sanitize_message({awre_call, {connect, Host, Port, Realm, Enc, AuthDetails, Tls}}) ->
+    {awre_call, {connect, Host, Port, Realm, Enc, sanitize_auth_details(AuthDetails), Tls}};
+sanitize_message({awre_call, {connect, Host, Port, Realm, Enc, AuthDetails}}) ->
+    {awre_call, {connect, Host, Port, Realm, Enc, sanitize_auth_details(AuthDetails)}};
+sanitize_message(Msg) ->
+    Msg.
+
+%% @private
+sanitize_auth_details(undefined) ->
+    undefined;
+sanitize_auth_details(AuthDetails) when is_map(AuthDetails) ->
+    SensitiveKeys = [privkey, password, secret, token],
+    maps:map(
+        fun(K, V) ->
+            case lists:member(K, SensitiveKeys) of
+                true -> <<"**REDACTED**">>;
+                false -> V
+            end
+        end,
+        AuthDetails
+    );
+sanitize_auth_details(AuthDetails) ->
+    AuthDetails.
