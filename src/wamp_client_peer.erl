@@ -26,6 +26,11 @@
 -define(DEFAULT_REGISTER_OPTS, #{disclose_caller => true, invoke => roundrobin}).
 -define(DEFAULT_SUBSCRIBE_OPTS, #{match => exact, get_retained => false}).
 -define(DEFAULT_CALL_OPTS, #{timeout => 15000, disclose_me => true}).
+%% Last-resort safety margin added on top of the caller's own WAMP-level
+%% Opts.timeout for call/5's hard deadline. If awre:call/5 hasn't returned
+%% by Opts.timeout + this margin, the worker process running it is
+%% forcibly killed rather than left to hang indefinitely.
+-define(HARD_DEADLINE_MARGIN, 5000).
 -define(DEFAULT_PUBLISH_OPTS, #{
     acknowledge => false,
     disclose_me => true,
@@ -347,35 +352,75 @@ call(WorkerPid, Uri, Opts, Args, KWArgs) when is_pid(WorkerPid) ->
     %% the caller's process
     Conn = gen_server:call(WorkerPid, connection, 5000),
 
-    try
-        is_pid(Conn) orelse error(no_connection),
+    %% The actual RPC call runs in a separate, monitored process with a
+    %% hard deadline. This exists because a caller-side hang here (observed
+    %% in production: a job stuck `executing` for days, past both its own
+    %% worker timeout and max_attempts) leaves no room for the normal
+    %% Opts.timeout/awre-internal timeout to have failed to fire -- whatever
+    %% the reason, exit(Pid, kill) below is the one signal guaranteed to
+    %% terminate it, short of a non-yielding native call.
+    Timeout = maps:get(timeout, Opts, 15000),
+    HardDeadline = Timeout + ?HARD_DEADLINE_MARGIN,
+    Parent = self(),
 
-        case awre:call(Conn, maps:to_list(Opts), Uri, Args, KWArgs) of
-            {ok, RDetails, RArgs, RKWArgs} ->
-                {ok, RArgs, RKWArgs, RDetails};
-            {error, RDetails, RUri, RArgs, RKWArgs} ->
-                {error, RUri, RArgs, RKWArgs, RDetails}
-        end
-    catch
-        exit:{timeout, _} ->
-            EKWArgs = #{
-                <<"procedure_uri">> => Uri,
-                <<"timeout">> => maps:get(timeout, Opts, <<"default">>)
-            },
-            {error, <<"wamp.error.timeout">>, [], EKWArgs, #{}};
+    {Pid, MonRef} = spawn_monitor(fun() ->
+        Result =
+            try
+                is_pid(Conn) orelse error(no_connection),
 
-        Class:Reason:Stacktrace ->
-            ?LOG_ERROR(#{
-                text => "Error while sending WAMP call request",
-                class => Class,
-                reason => Reason,
-                stacktrace => Stacktrace,
-                procedure_uri => Uri,
-                args => Args,
-                kwargs => KWArgs,
-                options => Opts
-            }),
-            erlang:raise(Class, Reason, Stacktrace)
+                case awre:call(Conn, maps:to_list(Opts), Uri, Args, KWArgs) of
+                    {ok, RDetails, RArgs, RKWArgs} ->
+                        {ok, RArgs, RKWArgs, RDetails};
+                    {error, RDetails, RUri, RArgs, RKWArgs} ->
+                        {error, RUri, RArgs, RKWArgs, RDetails}
+                end
+            catch
+                exit:{timeout, _} ->
+                    EKWArgs = #{
+                        <<"procedure_uri">> => Uri,
+                        <<"timeout">> => maps:get(timeout, Opts, <<"default">>)
+                    },
+                    {error, <<"wamp.error.timeout">>, [], EKWArgs, #{}};
+
+                Class:Reason:Stacktrace ->
+                    ?LOG_ERROR(#{
+                        text => "Error while sending WAMP call request",
+                        class => Class,
+                        reason => Reason,
+                        stacktrace => Stacktrace,
+                        procedure_uri => Uri,
+                        args => Args,
+                        kwargs => KWArgs,
+                        options => Opts
+                    }),
+                    erlang:raise(Class, Reason, Stacktrace)
+            end,
+        Parent ! {self(), Result}
+    end),
+
+    receive
+        {Pid, Result} ->
+            erlang:demonitor(MonRef, [flush]),
+            Result;
+
+        {'DOWN', MonRef, process, Pid, Reason} ->
+            %% The worker crashed (the generic Class:Reason branch above)
+            %% before it could send a result -- surface it as a real crash,
+            %% not a timeout, so it isn't misreported.
+            erlang:raise(error, Reason, [])
+    after HardDeadline ->
+        erlang:demonitor(MonRef, [flush]),
+        exit(Pid, kill),
+        ?LOG_ERROR(#{
+            text => "WAMP call exceeded hard deadline -- forcibly terminated",
+            procedure_uri => Uri,
+            hard_deadline_ms => HardDeadline
+        }),
+        EKWArgs = #{
+            <<"procedure_uri">> => Uri,
+            <<"reason">> => <<"hard_deadline_exceeded">>
+        },
+        {error, <<"wamp.error.timeout">>, [], EKWArgs, #{}}
     end.
 
 

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] - 2026-09-14
+
+### Fixed
+- **`call/5` could hang indefinitely past its own timeout, with no safety net**: Found in production — three `wamp_client_peer:call/5` invocations were observed stuck for 3-6 days in a live BEAM process, past both the caller's own `Opts.timeout` and the calling Oban job's 5-minute worker timeout, with no crash, no error, and no reconnect. The exact trigger wasn't isolated (traced through `awre:call/5` -> `awre_con`'s `gen_server:call`, which proved bounded and preemptible under every scenario reproduced in isolation — see the new test suite below), but the symptom itself needed a fix regardless of the precise underlying cause (suspected: a socket left in a state that neither the OS/TLS layer nor the WAMP-level ping/pong keepalive ever notices is dead).
+  - `call/5` now runs `awre:call/5` in a separate, monitored process with a hard deadline of `Opts.timeout + 5000ms`.
+  - If that deadline is exceeded, the worker process is forcibly terminated with `exit(Pid, kill)` — the one signal guaranteed to work regardless of what it's blocked on, short of a non-yielding native call — and the caller receives the same `{error, <<"wamp.error.timeout">>, [], _, #{}}` shape it already gets from a normal timeout, so no caller-side changes are required anywhere consuming this library.
+  - A genuine crash inside the call (the existing generic `Class:Reason` branch) still propagates as a crash via a new `{'DOWN', ...}` clause, rather than being misreported as a timeout.
+  - Added `test/wamp_client_peer_hard_deadline_tests.erl`: infra-free EUnit tests (mocking `awre:call/5` via `meck`, no live router required) covering normal success, normal WAMP timeout, the new hard-deadline kill (including confirming the stuck process is actually terminated afterward, not leaked), and generic crash propagation. Verified red then green: the hang-recovery test hangs indefinitely against the pre-fix code and passes in ~5.7s after the fix.
+
 ## [Unreleased] - 2026-03-19
 
 ### Fixed
